@@ -239,6 +239,9 @@
         canvas.style.outline = "none";
         const focusCanvas = () => canvas.focus({ preventScroll: true });
         canvas.addEventListener('pointerdown', focusCanvas);
+        // Persist camera state to workflow on every drag-release and wheel-zoom.
+        canvas.addEventListener('pointerup', () => emitCameraState());
+        canvas.addEventListener('wheel', () => emitCameraState(), { passive: true });
 
         // gsplat.js components
         let scene = null;
@@ -304,6 +307,65 @@
         // Track the current vertical FOV (deg) and target so we can re-frame
         // when the user changes settings.
         let currentFovDeg = 50;
+        // Cached current orbit target, kept in sync with controls.setCameraTarget calls.
+        let currentTarget = { x: 0, y: 0, z: 0 };
+        // Pending restore from parent; consumed once after the next MESH_LOADED.
+        let pendingRestore = null;
+
+        // Push the live camera+settings state up to the parent so it can
+        // persist it in the workflow JSON via the DOM widget's getValue().
+        let _lastEmitted = "";
+        function emitCameraState() {
+            if (!camera) return;
+            const state = {
+                v: 1,
+                pos: [camera.position.x, camera.position.y, camera.position.z],
+                target: [currentTarget.x, currentTarget.y, currentTarget.z],
+                fov: currentFovDeg,
+                scale: currentScale,
+                opacity: currentOpacity,
+            };
+            const s = JSON.stringify(state);
+            if (s === _lastEmitted) return;
+            _lastEmitted = s;
+            try { window.parent.postMessage({ type: "CAMERA_STATE", state }, "*"); }
+            catch (e) { /* parent may be cross-origin or gone */ }
+        }
+
+        // Apply a state previously snapshotted via emitCameraState.
+        function applyCameraState(state) {
+            if (!state || !camera || !controls) return;
+            if (Array.isArray(state.pos)) {
+                camera.position.x = state.pos[0];
+                camera.position.y = state.pos[1];
+                camera.position.z = state.pos[2];
+            }
+            if (Array.isArray(state.target)) {
+                currentTarget = { x: state.target[0], y: state.target[1], z: state.target[2] };
+                controls.setCameraTarget(new SPLAT.Vector3(currentTarget.x, currentTarget.y, currentTarget.z));
+            }
+            if (typeof state.fov === "number") {
+                currentFovDeg = state.fov;
+                setFovInputs(state.fov);
+                const fovRad = state.fov * Math.PI / 180;
+                const canvasHeight = canvas.clientHeight || 512;
+                const focal = canvasHeight / (2 * Math.tan(fovRad / 2));
+                camera.data.fx = focal;
+                camera.data.fy = focal;
+            }
+            if (typeof state.scale === "number") {
+                currentScale = state.scale;
+                setScaleInputs(state.scale);
+                if (originalScales) scheduleScaleUpdate(state.scale);
+            }
+            if (typeof state.opacity === "number") {
+                currentOpacity = state.opacity;
+                setOpacityInputs(state.opacity);
+                updateOpacity(state.opacity);
+            }
+            controls.update();
+            console.log("[GaussianViewer] Restored camera state from workflow");
+        }
 
         // Frame the camera on the splat's bounding box. Always centers on
         // bounds.center(). Camera sits behind the center along -Z at a
@@ -333,6 +395,7 @@
             camera.position.y = camPos.y;
             camera.position.z = camPos.z;
             controls.setCameraTarget(target);
+            currentTarget = { x: target.x, y: target.y, z: target.z };
 
             initialCameraData = { position: camPos, target: target, fx: focal, fy: focal };
 
@@ -340,6 +403,7 @@
                 center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2),
                 'maxExtent=', maxExtent.toFixed(2), 'radius=', radius.toFixed(2),
                 'fov=', fovDeg);
+            emitCameraState();
         }
 
         // Snap the camera onto one of the cardinal axes through the bbox center.
@@ -362,7 +426,9 @@
 
             const target = new SPLAT.Vector3(center.x, center.y, center.z);
             controls.setCameraTarget(target);
+            currentTarget = { x: target.x, y: target.y, z: target.z };
             console.log('[GaussianViewer] view along', (sign > 0 ? '+' : '-') + axis.toUpperCase());
+            emitCameraState();
         }
 
         // Compatibility shim: kept so any caller passing extrinsics/intrinsics
@@ -469,6 +535,13 @@
                 infoPanel.classList.remove('hidden');
                 infoContent.innerHTML = `<span style="color:#6cc;">Gaussian Splat Loaded</span><br><span style="color:#888;">${filename}</span>`;
 
+                // Apply any pending camera-state restore now that the splat is loaded.
+                // Falls AFTER frameOnBounds so the user's saved view overrides the default framing.
+                if (pendingRestore) {
+                    applyCameraState(pendingRestore);
+                    pendingRestore = null;
+                }
+
                 // Notify parent
                 window.parent.postMessage({
                     type: 'MESH_LOADED',
@@ -511,6 +584,11 @@
                     // Set the target - this recalculates orbit state from current camera.position
                     if (initialCameraData.target) {
                         controls.setCameraTarget(initialCameraData.target);
+                        currentTarget = {
+                            x: initialCameraData.target.x,
+                            y: initialCameraData.target.y,
+                            z: initialCameraData.target.z,
+                        };
                     }
 
                     console.log('[GaussianViewer] Reset camera to position:', pos.x, pos.y, pos.z);
@@ -523,6 +601,7 @@
                     console.log('[GaussianViewer] Reset camera to default position (0, 0, 5)');
                 }
                 controls.update();
+                emitCameraState();
             }
         }
 
@@ -644,26 +723,29 @@
             if (currentSplat && currentSplat.data && currentSplat.data.scales && originalScales) {
                 scheduleScaleUpdate(newScale);
             }
+            emitCameraState();
         }
 
         function updateOpacity(newOpacity) {
             newOpacity = Math.max(0, Math.min(1, parseFloat(newOpacity) || 1.0));
             currentOpacity = newOpacity;
             setOpacityInputs(newOpacity);
-            if (!(currentSplat && currentSplat.data && currentSplat.data.colors && originalOpacities)) return;
-            const colors = currentSplat.data.colors;
-            for (let i = 0; i < originalOpacities.length; i++) {
-                colors[i * opacityStride + 3] = Math.round(originalOpacities[i] * newOpacity);
+            if (currentSplat && currentSplat.data && currentSplat.data.colors && originalOpacities) {
+                const colors = currentSplat.data.colors;
+                for (let i = 0; i < originalOpacities.length; i++) {
+                    colors[i * opacityStride + 3] = Math.round(originalOpacities[i] * newOpacity);
+                }
+                currentSplat.data.changed = true;
+                currentSplat.data.detached = false;
             }
-            currentSplat.data.changed = true;
-            currentSplat.data.detached = false;
+            emitCameraState();
         }
 
         function updateFov(newFov) {
             newFov = Math.max(5, Math.min(170, parseFloat(newFov) || 50));
             setFovInputs(newFov);
-            if (currentSplat) frameOnBounds(currentSplat, newFov);
-            else currentFovDeg = newFov;
+            if (currentSplat) frameOnBounds(currentSplat, newFov);  // emits state itself
+            else { currentFovDeg = newFov; emitCameraState(); }
         }
 
         // FOV
@@ -692,11 +774,18 @@
 
         // Listen for messages from parent
         window.addEventListener('message', (event) => {
-            const { type, data, filename, extrinsics, intrinsics } = event.data;
+            const msg = event.data || {};
+            const { type, data, filename, extrinsics, intrinsics } = msg;
 
             if (type === 'LOAD_MESH_DATA' && data) {
                 console.log('[GaussianViewer] Received LOAD_MESH_DATA, size:', data.byteLength);
                 loadPLYFromData(data, filename || 'gaussian.ply', extrinsics, intrinsics);
+            } else if (type === 'RESTORE_CAMERA_STATE' && msg.state) {
+                // Parent has a saved state for this node. Buffer it: if the
+                // splat is already loaded, apply now; otherwise the loader
+                // will pick it up after frameOnBounds.
+                if (currentSplat) applyCameraState(msg.state);
+                else pendingRestore = msg.state;
             }
         });
 
