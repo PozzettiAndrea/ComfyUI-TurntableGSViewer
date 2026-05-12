@@ -110,16 +110,12 @@ app.registerExtension({
                 container.appendChild(infoPanel);
 
                 // --- Persistent camera-state plumbing ---------------------
-                // The iframe periodically emits 'CAMERA_STATE' messages whenever
-                // the user moves the camera or tweaks fov/scale/opacity. We
-                // cache the most recent JSON string here so the workflow
-                // serializer can read it via widget.getValue(). On workflow
-                // load, ComfyUI calls setValue() *before* the iframe loads;
-                // we buffer the value and re-send it as RESTORE_CAMERA_STATE
-                // whenever the iframe is ready (also re-applied after each
-                // node execution, since each PLY load re-frames first).
-                let cameraStateJSON = "";       // serialized last-known state
-                let pendingRestoreJSON = "";    // saved-but-not-yet-applied state
+                // Mirrors ComfyUI's built-in Load3D widget: state lives on
+                // node.properties["Camera Config"] (named dict), NOT inside
+                // widgets_values (positional). Putting the JSON string into
+                // widgets_values shifts the standard fov/width/height widgets
+                // by one slot on reload and breaks prompt validation.
+                let pendingRestoreJSON = "";
                 const sendRestore = () => {
                     if (!pendingRestoreJSON || !iframe.contentWindow) return;
                     try {
@@ -132,22 +128,34 @@ app.registerExtension({
                     }
                 };
 
-                // Add widget with required options
-                const widget = this.addDOMWidget("preview_gaussian", "GAUSSIAN_PREVIEW", container, {
-                    serialize: true,
-                    getValue() { return cameraStateJSON; },
-                    setValue(v) {
-                        if (typeof v === "string" && v.length > 0) {
-                            cameraStateJSON = v;
-                            pendingRestoreJSON = v;
-                            // If iframe is already up, try to apply immediately.
-                            sendRestore();
-                        } else {
-                            cameraStateJSON = "";
-                            pendingRestoreJSON = "";
-                        }
-                    },
-                });
+                // Defensive migration: an earlier version of this code wrote
+                // the camera-state JSON into widgets_values, which caused
+                // ComfyUI to load that JSON string into image_height's slot
+                // and shift fov/width too. Reset any non-numeric values back
+                // to their declared defaults so the node can run.
+                for (const w of (this.widgets || [])) {
+                    if ((w.type === "number" || w.type === "INT" || w.type === "FLOAT")
+                        && typeof w.value === "string") {
+                        const def = w.options?.default;
+                        console.warn("[TurntableGSViewer] resetting corrupted widget",
+                                     w.name, "=>", def);
+                        w.value = (def !== undefined) ? def : 0;
+                    }
+                }
+
+                // Seed pendingRestoreJSON from node.properties (Load3D pattern)
+                // if the workflow JSON had a saved pose.
+                const savedCfg = this.properties && this.properties["Camera Config"];
+                if (savedCfg && typeof savedCfg.state === "string") {
+                    pendingRestoreJSON = savedCfg.state;
+                }
+
+                // Iframe-display widget. serialize: false → never lands in
+                // widgets_values; we own persistence via node.properties.
+                const widget = this.addDOMWidget(
+                    "preview_gaussian", "GAUSSIAN_PREVIEW", container,
+                    { serialize: false },
+                );
 
                 // Store reference to node for dynamic resizing
                 const node = this;
@@ -185,9 +193,16 @@ app.registerExtension({
 
                 // Listen for messages from iframe
                 window.addEventListener('message', async (event) => {
-                    // Camera-state pushes from iframe → cache for workflow JSON
+                    // Camera-state pushes from iframe → persist on
+                    // node.properties["Camera Config"] (Load3D pattern).
                     if (event.data?.type === "CAMERA_STATE" && event.data.state) {
-                        cameraStateJSON = JSON.stringify(event.data.state);
+                        const s = event.data.state;
+                        node.properties = node.properties || {};
+                        const cfg = node.properties["Camera Config"] || {};
+                        cfg.cameraType = cfg.cameraType || "perspective";
+                        cfg.fov = (typeof s.fov === "number") ? s.fov : (cfg.fov ?? 50);
+                        cfg.state = JSON.stringify(s);
+                        node.properties["Camera Config"] = cfg;
                         return;
                     }
                     // Iframe just finished a PLY load → if we have a saved
