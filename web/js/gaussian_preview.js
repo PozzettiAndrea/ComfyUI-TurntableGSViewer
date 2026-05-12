@@ -109,10 +109,44 @@ app.registerExtension({
                 container.appendChild(iframe);
                 container.appendChild(infoPanel);
 
+                // --- Persistent camera-state plumbing ---------------------
+                // The iframe periodically emits 'CAMERA_STATE' messages whenever
+                // the user moves the camera or tweaks fov/scale/opacity. We
+                // cache the most recent JSON string here so the workflow
+                // serializer can read it via widget.getValue(). On workflow
+                // load, ComfyUI calls setValue() *before* the iframe loads;
+                // we buffer the value and re-send it as RESTORE_CAMERA_STATE
+                // whenever the iframe is ready (also re-applied after each
+                // node execution, since each PLY load re-frames first).
+                let cameraStateJSON = "";       // serialized last-known state
+                let pendingRestoreJSON = "";    // saved-but-not-yet-applied state
+                const sendRestore = () => {
+                    if (!pendingRestoreJSON || !iframe.contentWindow) return;
+                    try {
+                        const state = JSON.parse(pendingRestoreJSON);
+                        iframe.contentWindow.postMessage(
+                            { type: "RESTORE_CAMERA_STATE", state }, "*",
+                        );
+                    } catch (e) {
+                        console.warn("[TurntableGSViewer] bad saved camera state:", e);
+                    }
+                };
+
                 // Add widget with required options
                 const widget = this.addDOMWidget("preview_gaussian", "GAUSSIAN_PREVIEW", container, {
-                    getValue() { return ""; },
-                    setValue(v) { }
+                    serialize: true,
+                    getValue() { return cameraStateJSON; },
+                    setValue(v) {
+                        if (typeof v === "string" && v.length > 0) {
+                            cameraStateJSON = v;
+                            pendingRestoreJSON = v;
+                            // If iframe is already up, try to apply immediately.
+                            sendRestore();
+                        } else {
+                            cameraStateJSON = "";
+                            pendingRestoreJSON = "";
+                        }
+                    },
                 });
 
                 // Store reference to node for dynamic resizing
@@ -144,10 +178,24 @@ app.registerExtension({
                 let iframeLoaded = false;
                 iframe.addEventListener('load', () => {
                     iframeLoaded = true;
+                    // Push any pending saved camera state now that the iframe is alive
+                    // (e.g. on workflow reload before the node has been re-queued).
+                    sendRestore();
                 });
 
                 // Listen for messages from iframe
                 window.addEventListener('message', async (event) => {
+                    // Camera-state pushes from iframe → cache for workflow JSON
+                    if (event.data?.type === "CAMERA_STATE" && event.data.state) {
+                        cameraStateJSON = JSON.stringify(event.data.state);
+                        return;
+                    }
+                    // Iframe just finished a PLY load → if we have a saved
+                    // pose, replay it. The iframe's loadPLYFromData already
+                    // frames on bounds first, so this restore wins.
+                    if (event.data?.type === "MESH_LOADED") {
+                        sendRestore();
+                    }
                     // Handle screenshot messages
                     if (event.data.type === 'SCREENSHOT' && event.data.image) {
                         try {
