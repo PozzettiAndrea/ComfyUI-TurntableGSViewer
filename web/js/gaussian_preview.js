@@ -1,22 +1,22 @@
 /**
- * ComfyUI PlyPreview - Gaussian Splat Preview Widget
+ * ComfyUI-TurntableGSViewer - Gaussian Splat Preview Widget
  * Interactive 3D Gaussian Splatting viewer using gsplat.js
  */
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
-// Auto-detect extension folder name (handles comfyui-PlyPreview or other folder names)
+// Auto-detect extension folder name (so this copy doesn't collide with upstream comfyui-PlyPreview).
 const EXTENSION_FOLDER = (() => {
     const url = import.meta.url;
     const match = url.match(/\/extensions\/([^/]+)\//);
-    return match ? match[1] : "comfyui-PlyPreview";
+    return match ? match[1] : "ComfyUI-TurntableGSViewer";
 })();
 
-console.log("[PlyPreview Gaussian] Loading extension...");
+console.log("[TurntableGSViewer] Loading extension...");
 
 app.registerExtension({
-    name: "plypreview.gaussianpreview",
+    name: "turntablegsviewer.previewgaussians",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Auto-refresh PLY dropdown list for the file selector node
@@ -45,7 +45,7 @@ app.registerExtension({
                             app.graph.setDirtyCanvas(true, true);
                         }
                     } catch (e) {
-                        console.warn("[PlyPreview] Failed to refresh PLY list", e);
+                        console.warn("[TurntableGSViewer] Failed to refresh PLY list", e);
                     }
                 };
 
@@ -137,7 +137,7 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
 
-                    console.log("[GeomPack Gaussian] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
+                    console.log("[TurntableGSViewer] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
                 };
 
                 // Track iframe load state
@@ -181,18 +181,18 @@ app.registerExtension({
 
                             if (response.ok) {
                                 const result = await response.json();
-                                console.log('[GeomPack Gaussian] Screenshot saved:', result.name);
+                                console.log('[TurntableGSViewer] Screenshot saved:', result.name);
                             } else {
                                 throw new Error(`Upload failed: ${response.status}`);
                             }
 
                         } catch (error) {
-                            console.error('[GeomPack Gaussian] Error saving screenshot:', error);
+                            console.error('[TurntableGSViewer] Error saving screenshot:', error);
                         }
                     }
                     // Handle error messages from iframe
                     else if (event.data.type === 'MESH_ERROR' && event.data.error) {
-                        console.error('[GeomPack Gaussian] Error from viewer:', event.data.error);
+                        console.error('[TurntableGSViewer] Error from viewer:', event.data.error);
                         if (infoPanel) {
                             infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error: ${event.data.error}</div>`;
                         }
@@ -205,7 +205,7 @@ app.registerExtension({
                 // Handle execution
                 const onExecuted = this.onExecuted;
                 this.onExecuted = function(message) {
-                    console.log("[GeomPack Gaussian] onExecuted called with:", message);
+                    console.log("[TurntableGSViewer] onExecuted called with:", message);
                     onExecuted?.apply(this, arguments);
 
                     // Check for errors
@@ -247,19 +247,19 @@ app.registerExtension({
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
                             if (!iframe.contentWindow) {
-                                console.error("[GeomPack Gaussian] Iframe contentWindow not available");
+                                console.error("[TurntableGSViewer] Iframe contentWindow not available");
                                 return;
                             }
 
                             try {
                                 // Fetch the PLY file from parent context (authenticated)
-                                console.log("[GeomPack Gaussian] Fetching PLY file:", filepath);
+                                console.log("[TurntableGSViewer] Fetching PLY file:", filepath);
                                 const response = await fetch(filepath);
                                 if (!response.ok) {
                                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                                 }
                                 const arrayBuffer = await response.arrayBuffer();
-                                console.log("[GeomPack Gaussian] Fetched PLY file, size:", arrayBuffer.byteLength);
+                                console.log("[TurntableGSViewer] Fetched PLY file, size:", arrayBuffer.byteLength);
 
                                 // Send the data to iframe with camera parameters
                                 iframe.contentWindow.postMessage({
@@ -271,7 +271,7 @@ app.registerExtension({
                                     timestamp: Date.now()
                                 }, "*", [arrayBuffer]);
                             } catch (error) {
-                                console.error("[GeomPack Gaussian] Error fetching PLY:", error);
+                                console.error("[TurntableGSViewer] Error fetching PLY:", error);
                                 infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading PLY: ${error.message}</div>`;
                             }
                         };
