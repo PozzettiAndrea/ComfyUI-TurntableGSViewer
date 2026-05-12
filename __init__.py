@@ -11,7 +11,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PreviewGaussians": "Preview Gaussians",
+    "PreviewGaussians": "Preview Gaussians Turntable",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
