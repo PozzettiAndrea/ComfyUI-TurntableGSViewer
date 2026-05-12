@@ -68,6 +68,39 @@ app.registerExtension({
         if (nodeData.name === "PreviewGaussians") {
             console.log("[TurntableGSViewer] Registering Preview Gaussians node");
 
+            // After ComfyUI applies serialized widgets_values, reset any numeric
+            // widget whose value is a string. Earlier versions of this code
+            // persisted camera state into widgets_values, shifting fov/width/
+            // height by one slot on reload. onConfigure runs AFTER configure()
+            // has stamped the saved (possibly bad) values onto the widgets,
+            // so this is where the migration has to live — onNodeCreated runs
+            // before configure() and would only see fresh defaults.
+            const _origOnConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function(info) {
+                const r = _origOnConfigure ? _origOnConfigure.apply(this, arguments) : undefined;
+                for (const w of (this.widgets || [])) {
+                    if ((w.type === "number" || w.type === "INT" || w.type === "FLOAT")
+                        && typeof w.value === "string") {
+                        const def = w.options?.default;
+                        console.warn("[TurntableGSViewer] resetting corrupted widget",
+                                     w.name, "(was string) ->", def);
+                        w.value = (def !== undefined) ? def : 0;
+                    }
+                    // Also clamp out-of-range numerics (e.g. the shifted
+                    // fov_degrees=512 from a saved-then-shifted workflow).
+                    if (typeof w.value === "number" && w.options) {
+                        const { min, max, default: def } = w.options;
+                        if ((typeof min === "number" && w.value < min) ||
+                            (typeof max === "number" && w.value > max)) {
+                            console.warn("[TurntableGSViewer] resetting out-of-range widget",
+                                         w.name, w.value, "->", def);
+                            w.value = (def !== undefined) ? def : (min ?? 0);
+                        }
+                    }
+                }
+                return r;
+            };
+
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
@@ -128,21 +161,6 @@ app.registerExtension({
                     }
                 };
 
-                // Defensive migration: an earlier version of this code wrote
-                // the camera-state JSON into widgets_values, which caused
-                // ComfyUI to load that JSON string into image_height's slot
-                // and shift fov/width too. Reset any non-numeric values back
-                // to their declared defaults so the node can run.
-                for (const w of (this.widgets || [])) {
-                    if ((w.type === "number" || w.type === "INT" || w.type === "FLOAT")
-                        && typeof w.value === "string") {
-                        const def = w.options?.default;
-                        console.warn("[TurntableGSViewer] resetting corrupted widget",
-                                     w.name, "=>", def);
-                        w.value = (def !== undefined) ? def : 0;
-                    }
-                }
-
                 // Seed pendingRestoreJSON from node.properties (Load3D pattern)
                 // if the workflow JSON had a saved pose.
                 const savedCfg = this.properties && this.properties["Camera Config"];
@@ -193,6 +211,11 @@ app.registerExtension({
 
                 // Listen for messages from iframe
                 window.addEventListener('message', async (event) => {
+                    // Only react to messages from OUR iframe — otherwise a
+                    // second PreviewGaussians node's iframe would stomp this
+                    // node's state.
+                    if (event.source !== iframe.contentWindow) return;
+
                     // Camera-state pushes from iframe → persist on
                     // node.properties["Camera Config"] (Load3D pattern).
                     if (event.data?.type === "CAMERA_STATE" && event.data.state) {
