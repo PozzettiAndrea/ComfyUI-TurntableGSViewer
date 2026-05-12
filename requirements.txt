@@ -1,2 +1,1 @@
-numpy>=1.23
-plyfile>=1.0.3
+# No Python deps — PLY parsing happens in the browser via gsplat.js.

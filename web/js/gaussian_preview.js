@@ -65,8 +65,8 @@ app.registerExtension({
             };
         }
 
-        if (nodeData.name === "PlyPreviewPreviewGaussianEnhance") {
-            console.log("[PlyPreview Gaussian] Registering Preview Gaussian Enhance node");
+        if (nodeData.name === "PreviewGaussians") {
+            console.log("[TurntableGSViewer] Registering Preview Gaussians node");
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
