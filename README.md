@@ -1,3 +1,6 @@
+
+https://github.com/user-attachments/assets/4e21f1fd-9ba2-4ecc-b777-34f5dd9f7075
+
 # ComfyUI-TurntableGSViewer
 
 Tiny Gaussian-splat turntable viewer for ComfyUI. One node, `Preview Gaussians`, with a
