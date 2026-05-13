@@ -9,6 +9,22 @@ from .common import (
 )
 
 
+def _count_gaussians(path: str) -> int:
+    """Cheap header-only read of the splat count from a PLY. Returns 0 if
+    the file isn't a PLY or the header can't be parsed."""
+    if not path.lower().endswith(".ply"):
+        return 0
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(8192).decode("latin-1", errors="replace")
+        for line in buf.split("\n"):
+            if line.startswith("element vertex "):
+                return int(line.split()[2])
+    except (OSError, ValueError, IndexError):
+        return 0
+    return 0
+
+
 class PreviewGaussians:
     """Interactive Gaussian-splat turntable viewer (gsplat.js)."""
 
@@ -30,6 +46,12 @@ class PreviewGaussians:
                 "image_height": ("INT", {
                     "default": 512, "min": 64, "max": 4096, "step": 8,
                 }),
+                "renderer": (["webgl2", "webgpu"], {
+                    "default": "webgl2",
+                    "tooltip": "webgl2 = universal compatibility (mkkellogg/GaussianSplats3D); "
+                               "webgpu = faster on Chrome/Safari (PlayCanvas), "
+                               "falls back to webgl2 if the browser lacks WebGPU support",
+                }),
             },
         }
 
@@ -38,7 +60,7 @@ class PreviewGaussians:
     FUNCTION = "preview"
     CATEGORY = "viewer"
 
-    def preview(self, ply_path, fov_degrees, image_width, image_height):
+    def preview(self, ply_path, fov_degrees, image_width, image_height, renderer):
         if not ply_path:
             return {"ui": {"error": ["No PLY path provided"]}}
         if not os.path.exists(ply_path):
@@ -51,6 +73,7 @@ class PreviewGaussians:
             relative_path = filename
 
         file_size_mb = round(os.path.getsize(ply_path) / (1024 * 1024), 2)
+        num_gaussians = _count_gaussians(ply_path)
         intrinsics = get_default_intrinsics(image_width, image_height, fov_degrees)
         extrinsics = get_default_extrinsics()
 
@@ -58,7 +81,9 @@ class PreviewGaussians:
             "ply_file": [relative_path],
             "filename": [filename],
             "file_size_mb": [file_size_mb],
+            "num_gaussians": [num_gaussians],
             "extrinsics": [extrinsics],
             "intrinsics": [intrinsics],
             "fov_degrees": [fov_degrees],
+            "renderer": [renderer],
         }}

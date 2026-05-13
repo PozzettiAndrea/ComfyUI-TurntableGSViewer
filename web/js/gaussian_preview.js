@@ -113,6 +113,44 @@ app.registerExtension({
                 container.style.flexDirection = "column";
                 container.style.backgroundColor = "#1a1a1a";
                 container.style.overflow = "hidden";
+                container.style.position = "relative";   // anchor for loading bar overlay
+
+                // Loading-progress overlay (download + parse). Sits over the
+                // top edge of the iframe so the user sees activity during the
+                // long PLY fetch + parse window.
+                const loadBar = document.createElement("div");
+                loadBar.style.cssText =
+                    "position:absolute;top:0;left:0;right:0;height:4px;" +
+                    "background:rgba(0,0,0,0.35);z-index:100;" +
+                    "transition:opacity 0.3s ease;pointer-events:none;opacity:0;";
+                const loadFill = document.createElement("div");
+                loadFill.style.cssText =
+                    "height:100%;width:0%;background:linear-gradient(90deg,#3a8,#6c6);" +
+                    "transition:width 0.15s linear;";
+                loadBar.appendChild(loadFill);
+                const loadLabel = document.createElement("div");
+                loadLabel.style.cssText =
+                    "position:absolute;top:6px;left:8px;" +
+                    "font:10px monospace;color:#cfc;" +
+                    "text-shadow:0 0 4px rgba(0,0,0,0.8);pointer-events:none;";
+                loadBar.appendChild(loadLabel);
+
+                function showLoadBar(label) {
+                    loadFill.style.width = "0%";
+                    loadLabel.textContent = label || "";
+                    loadBar.style.opacity = "1";
+                }
+                function setLoadProgress(pct, label) {
+                    const p = Math.max(0, Math.min(100, pct || 0));
+                    loadFill.style.width = p.toFixed(1) + "%";
+                    if (label != null) loadLabel.textContent = label;
+                }
+                function hideLoadBar() {
+                    loadBar.style.opacity = "0";
+                }
+                this._showLoadBar = showLoadBar;
+                this._setLoadProgress = setLoadProgress;
+                this._hideLoadBar = hideLoadBar;
 
                 // Create iframe for gsplat.js viewer
                 const iframe = document.createElement("iframe");
@@ -138,9 +176,11 @@ app.registerExtension({
                 infoPanel.style.overflow = "hidden";
                 infoPanel.innerHTML = '<span style="color: #888;">Gaussian splat info will appear here after execution</span>';
 
-                // Add iframe and info panel to container
+                // Add iframe + info panel + loading-bar overlay to container.
+                // loadBar last so its overlay sits above the iframe.
                 container.appendChild(iframe);
                 container.appendChild(infoPanel);
+                container.appendChild(loadBar);
 
                 // --- Persistent camera-state plumbing ---------------------
                 // Mirrors ComfyUI's built-in Load3D widget: state lives on
@@ -167,6 +207,23 @@ app.registerExtension({
                 if (savedCfg && typeof savedCfg.state === "string") {
                     pendingRestoreJSON = savedCfg.state;
                 }
+
+                // Viewer-only "Use SPZ" preference, persisted to workflow JSON.
+                // Defaults to true (SPZ is much smaller for the same scene).
+                this.properties = this.properties || {};
+                if (typeof this.properties["Use SPZ"] !== "boolean") {
+                    this.properties["Use SPZ"] = true;
+                }
+                const getUseSPZ = () => !!this.properties["Use SPZ"];
+
+                const sendSettings = () => {
+                    if (!iframe.contentWindow) return;
+                    iframe.contentWindow.postMessage({
+                        type: "RESTORE_VIEWER_SETTINGS",
+                        settings: { useSPZ: getUseSPZ() },
+                    }, "*");
+                };
+                this._sendSettings = sendSettings;
 
                 // Iframe-display widget. serialize: false → never lands in
                 // widgets_values; we own persistence via node.properties.
@@ -207,6 +264,9 @@ app.registerExtension({
                     // Push any pending saved camera state now that the iframe is alive
                     // (e.g. on workflow reload before the node has been re-queued).
                     sendRestore();
+                    // Also push the current SPZ toggle state so the checkbox
+                    // reflects the workflow's saved preference.
+                    sendSettings();
                 });
 
                 // Listen for messages from iframe
@@ -216,6 +276,21 @@ app.registerExtension({
                     // node's state.
                     if (event.source !== iframe.contentWindow) return;
 
+                    // Settings toggle (currently just SPZ compression) from
+                    // iframe → persist on node.properties + re-fetch.
+                    if (event.data?.type === "SETTING_CHANGED" && event.data.key) {
+                        const key = event.data.key;
+                        if (key === "useSPZ") {
+                            node.properties = node.properties || {};
+                            node.properties["Use SPZ"] = !!event.data.value;
+                            console.log("[TurntableGSViewer] Use SPZ ->", node.properties["Use SPZ"]);
+                            // Re-fetch with the new format if a PLY is loaded.
+                            if (typeof node._reloadSplat === "function") {
+                                node._reloadSplat();
+                            }
+                        }
+                        return;
+                    }
                     // Camera-state pushes from iframe → persist on
                     // node.properties["Camera Config"] (Load3D pattern).
                     if (event.data?.type === "CAMERA_STATE" && event.data.state) {
@@ -232,7 +307,16 @@ app.registerExtension({
                     // pose, replay it. The iframe's loadPLYFromData already
                     // frames on bounds first, so this restore wins.
                     if (event.data?.type === "MESH_LOADED") {
+                        node._hideLoadBar?.();
                         sendRestore();
+                    }
+                    if (event.data?.type === "MESH_ERROR") {
+                        // Surface a red bar so failure is visible
+                        if (loadBar && loadFill) {
+                            loadFill.style.background = "#c44";
+                            loadFill.style.width = "100%";
+                            loadLabel.textContent = "Error: " + (event.data.error || "load failed");
+                        }
                     }
                     // Handle screenshot messages
                     if (event.data.type === 'SCREENSHOT' && event.data.image) {
@@ -305,10 +389,12 @@ app.registerExtension({
                         const filename = message.ply_file[0];
                         const displayName = message.filename?.[0] || filename;
                         const fileSizeMb = message.file_size_mb?.[0] || 'N/A';
+                        const numGaussians = message.num_gaussians?.[0] || 0;
 
                         // Extract camera parameters if provided
                         const extrinsics = message.extrinsics?.[0] || null;
                         const intrinsics = message.intrinsics?.[0] || null;
+                        const renderer = message.renderer?.[0] || "webgl2";
 
                         // Resize node to match image aspect ratio from intrinsics
                         if (intrinsics && intrinsics[0] && intrinsics[1]) {
@@ -318,17 +404,39 @@ app.registerExtension({
                         }
 
                         // Update info panel
+                        const gaussianRow = numGaussians > 0
+                            ? `<span style="color: #888;">Gaussians:</span>
+                               <span>${numGaussians.toLocaleString()}</span>`
+                            : '';
                         infoPanel.innerHTML = `
                             <div style="display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;">
                                 <span style="color: #888;">File:</span>
                                 <span style="color: #6cc;">${displayName}</span>
                                 <span style="color: #888;">Size:</span>
                                 <span>${fileSizeMb} MB</span>
+                                ${gaussianRow}
                             </div>
                         `;
 
-                        // ComfyUI serves output files via /view API endpoint
-                        const filepath = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                        // Build a fetch URL based on the current SPZ toggle.
+                        //   ON  → /turntablegsviewer/spz (lazy server-side transcode + cache)
+                        //   OFF → ComfyUI's /view endpoint, raw PLY
+                        // The iframe picks SceneFormat from the extension in
+                        // `filename`, so we also flip that.
+                        const buildFetchPlan = () => {
+                            if (getUseSPZ()) {
+                                return {
+                                    url: `/turntablegsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`,
+                                    filename: filename.replace(/\.ply$/i, ".spz"),
+                                    label: "Compressing / downloading SPZ...",
+                                };
+                            }
+                            return {
+                                url: `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`,
+                                filename: filename,
+                                label: "Downloading PLY...",
+                            };
+                        };
 
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
@@ -337,30 +445,82 @@ app.registerExtension({
                                 return;
                             }
 
+                            const plan = buildFetchPlan();
+                            const filepath = plan.url;
+
                             try {
-                                // Fetch the PLY file from parent context (authenticated)
-                                console.log("[TurntableGSViewer] Fetching PLY file:", filepath);
+                                // Fetch the file from parent context (authenticated).
+                                // Stream so we can log download progress (often >200 MB for PLY).
+                                const t0 = performance.now();
+                                console.log("[TurntableGSViewer] fetch start:", filepath);
+                                node._showLoadBar?.(plan.label);
                                 const response = await fetch(filepath);
                                 if (!response.ok) {
                                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                                 }
-                                const arrayBuffer = await response.arrayBuffer();
-                                console.log("[TurntableGSViewer] Fetched PLY file, size:", arrayBuffer.byteLength);
+                                const totalHdr = response.headers.get("content-length");
+                                const total = totalHdr ? parseInt(totalHdr, 10) : 0;
+                                console.log(`[TurntableGSViewer] fetch response 200; content-length=${total || "unknown"}`);
 
-                                // Send the data to iframe with camera parameters
+                                const chunks = [];
+                                let received = 0;
+                                let lastPctLogged = -1;
+                                const reader = response.body?.getReader();
+                                if (reader) {
+                                    for (;;) {
+                                        const { done, value } = await reader.read();
+                                        if (done) break;
+                                        chunks.push(value);
+                                        received += value.byteLength;
+                                        if (total > 0) {
+                                            const pct = (received / total) * 100;
+                                            const mb = (received / (1024*1024)).toFixed(1);
+                                            const tmb = (total / (1024*1024)).toFixed(1);
+                                            node._setLoadProgress?.(pct, `Downloading: ${mb} / ${tmb} MB`);
+                                            const ipct = Math.floor(pct);
+                                            if (ipct !== lastPctLogged && (ipct % 5 === 0 || ipct === 100)) {
+                                                console.log(`[TurntableGSViewer] download ${ipct}%  ${mb}/${tmb} MB`);
+                                                lastPctLogged = ipct;
+                                            }
+                                        } else {
+                                            node._setLoadProgress?.(50, `Downloading: ${(received/(1024*1024)).toFixed(1)} MB`);
+                                            if (chunks.length % 64 === 0) {
+                                                console.log(`[TurntableGSViewer] downloaded ${(received/(1024*1024)).toFixed(1)} MB so far`);
+                                            }
+                                        }
+                                    }
+                                }
+                                // Stitch chunks into one ArrayBuffer.
+                                const u8 = new Uint8Array(received);
+                                let off = 0;
+                                for (const c of chunks) { u8.set(c, off); off += c.byteLength; }
+                                const arrayBuffer = u8.buffer;
+                                const dt = performance.now() - t0;
+                                const speed = received > 0 ? (received / (1024*1024)) / (dt / 1000) : 0;
+                                console.log(`[TurntableGSViewer] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
+
+                                // Send the data to iframe with camera parameters.
+                                // `plan.filename` is `.spz` or `.ply` so the
+                                // adapter can pick SceneFormat.
+                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", plan.filename);
+                                node._setLoadProgress?.(100, "Parsing splats...");
                                 iframe.contentWindow.postMessage({
                                     type: "LOAD_MESH_DATA",
                                     data: arrayBuffer,
-                                    filename: filename,
+                                    filename: plan.filename,
                                     extrinsics: extrinsics,
                                     intrinsics: intrinsics,
+                                    renderer: renderer,
                                     timestamp: Date.now()
                                 }, "*", [arrayBuffer]);
                             } catch (error) {
-                                console.error("[TurntableGSViewer] Error fetching PLY:", error);
-                                infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading PLY: ${error.message}</div>`;
+                                console.error("[TurntableGSViewer] Error fetching splat:", error);
+                                infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading splat: ${error.message}</div>`;
                             }
                         };
+
+                        // Expose so the SPZ toggle handler can re-fetch.
+                        node._reloadSplat = fetchAndSend;
 
                         // Fetch and send when iframe is ready
                         if (iframeLoaded) {

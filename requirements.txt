@@ -1,1 +1,4 @@
-# No Python deps — PLY parsing happens in the browser via gsplat.js.
+# spz: Niantic's compressed Gaussian-splat format. When the viewer's
+# "Compress (SPZ)" toggle is on, we transcode the PLY on the server and
+# ship the ~6x smaller .spz to the client.
+spz
