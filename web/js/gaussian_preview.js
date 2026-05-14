@@ -1,5 +1,5 @@
 /**
- * ComfyUI-TurntableGSViewer - Gaussian Splat Preview Widget
+ * ComfyUI-GSViewer - Gaussian Splat Preview Widget
  * Interactive 3D Gaussian Splatting viewer using gsplat.js
  */
 
@@ -10,13 +10,13 @@ import { api } from "../../../scripts/api.js";
 const EXTENSION_FOLDER = (() => {
     const url = import.meta.url;
     const match = url.match(/\/extensions\/([^/]+)\//);
-    return match ? match[1] : "ComfyUI-TurntableGSViewer";
+    return match ? match[1] : "ComfyUI-GSViewer";
 })();
 
-console.log("[TurntableGSViewer] Loading extension...");
+console.log("[GSViewer] Loading extension...");
 
 app.registerExtension({
-    name: "turntablegsviewer.previewgaussians",
+    name: "gsviewer.previewgaussians",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Auto-refresh PLY dropdown list for the file selector node
@@ -45,7 +45,7 @@ app.registerExtension({
                             app.graph.setDirtyCanvas(true, true);
                         }
                     } catch (e) {
-                        console.warn("[TurntableGSViewer] Failed to refresh PLY list", e);
+                        console.warn("[GSViewer] Failed to refresh PLY list", e);
                     }
                 };
 
@@ -66,33 +66,86 @@ app.registerExtension({
         }
 
         if (nodeData.name === "PreviewGaussians") {
-            console.log("[TurntableGSViewer] Registering Preview Gaussians node");
+            console.log("[GSViewer] Registering Preview Gaussians node");
 
-            // After ComfyUI applies serialized widgets_values, reset any numeric
-            // widget whose value is a string. Earlier versions of this code
-            // persisted camera state into widgets_values, shifting fov/width/
-            // height by one slot on reload. onConfigure runs AFTER configure()
-            // has stamped the saved (possibly bad) values onto the widgets,
-            // so this is where the migration has to live — onNodeCreated runs
-            // before configure() and would only see fresh defaults.
+            // After ComfyUI applies serialized widgets_values, defend
+            // against stale workflow schemas. Two shapes have shipped
+            // to users over time:
+            //
+            //   (a) Pre-renderer-widget era: widgets_values was
+            //       [fov, w, h, "<camera-state JSON>"] — only 4
+            //       entries, with the camera state glued onto the end.
+            //   (b) Post-renderer-widget era: widgets_values is
+            //       [fov, w, h, renderer, transport_format, ""].
+            //
+            // When (a) is loaded against today's 5-widget schema,
+            // LiteGraph applies the JSON string to widgets[3] which is
+            // now `renderer` (a combo) — the prompt validator refuses
+            // because "<JSON>" is not in ["spark","playcanvas"]. The
+            // walk below rescues that JSON back to
+            // node.properties["Camera Config"] and resets the widget.
+            //
+            // onConfigure runs AFTER configure() has stamped the saved
+            // values onto the widgets, so this is where the migration
+            // has to live (onNodeCreated runs before and only sees
+            // defaults).
             const _origOnConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function(info) {
                 const r = _origOnConfigure ? _origOnConfigure.apply(this, arguments) : undefined;
                 for (const w of (this.widgets || [])) {
+                    const optsValues = w.options && Array.isArray(w.options.values);
+                    const isCombo    = w.type === "combo" || optsValues;
+
+                    // (1) Stranded camera-state JSON in any widget value.
+                    if (typeof w.value === "string"
+                        && w.value.length > 20
+                        && w.value[0] === "{"
+                        && w.value.includes('"pos"')) {
+                        try {
+                            const parsed = JSON.parse(w.value);
+                            if (Array.isArray(parsed.pos) && Array.isArray(parsed.target)) {
+                                this.properties = this.properties || {};
+                                const cfg = this.properties["Camera Config"] || {};
+                                cfg.cameraType = cfg.cameraType || "perspective";
+                                cfg.fov   = (typeof parsed.fov === "number") ? parsed.fov : (cfg.fov ?? 50);
+                                cfg.state = cfg.state || w.value;
+                                this.properties["Camera Config"] = cfg;
+                                console.warn("[GSViewer] rescued stranded camera state from widget",
+                                             w.name, "-> properties['Camera Config']");
+                                w.value = w.options?.default
+                                          ?? (optsValues ? w.options.values[0] : "");
+                                continue;
+                            }
+                        } catch (_) { /* not JSON; fall through */ }
+                    }
+
+                    // (2) Combo widget value isn't a valid option.
+                    if (isCombo && optsValues && !w.options.values.includes(w.value)) {
+                        const def = (w.options.default !== undefined)
+                                    ? w.options.default
+                                    : w.options.values[0];
+                        console.warn("[GSViewer] resetting combo widget",
+                                     w.name, "(value", JSON.stringify(w.value), "not in options) ->", def);
+                        w.value = def;
+                        continue;
+                    }
+
+                    // (3) Numeric widgets given a string (legacy shift).
                     if ((w.type === "number" || w.type === "INT" || w.type === "FLOAT")
                         && typeof w.value === "string") {
                         const def = w.options?.default;
-                        console.warn("[TurntableGSViewer] resetting corrupted widget",
+                        console.warn("[GSViewer] resetting corrupted widget",
                                      w.name, "(was string) ->", def);
                         w.value = (def !== undefined) ? def : 0;
                     }
-                    // Also clamp out-of-range numerics (e.g. the shifted
-                    // fov_degrees=512 from a saved-then-shifted workflow).
+
+                    // (4) Out-of-range numerics (e.g. fov_degrees=512
+                    //     from a saved-then-shifted workflow).
                     if (typeof w.value === "number" && w.options) {
                         const { min, max, default: def } = w.options;
                         if ((typeof min === "number" && w.value < min) ||
                             (typeof max === "number" && w.value > max)) {
-                            console.warn("[TurntableGSViewer] resetting out-of-range widget",
+                            console.warn("[GSViewer] resetting out-of-range widget",
                                          w.name, w.value, "->", def);
                             w.value = (def !== undefined) ? def : (min ?? 0);
                         }
@@ -197,7 +250,7 @@ app.registerExtension({
                             { type: "RESTORE_CAMERA_STATE", state }, "*",
                         );
                     } catch (e) {
-                        console.warn("[TurntableGSViewer] bad saved camera state:", e);
+                        console.warn("[GSViewer] bad saved camera state:", e);
                     }
                 };
 
@@ -237,7 +290,7 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
 
-                    console.log("[TurntableGSViewer] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
+                    console.log("[GSViewer] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
                 };
 
                 // Track iframe load state
@@ -316,18 +369,18 @@ app.registerExtension({
 
                             if (response.ok) {
                                 const result = await response.json();
-                                console.log('[TurntableGSViewer] Screenshot saved:', result.name);
+                                console.log('[GSViewer] Screenshot saved:', result.name);
                             } else {
                                 throw new Error(`Upload failed: ${response.status}`);
                             }
 
                         } catch (error) {
-                            console.error('[TurntableGSViewer] Error saving screenshot:', error);
+                            console.error('[GSViewer] Error saving screenshot:', error);
                         }
                     }
                     // Handle error messages from iframe
                     else if (event.data.type === 'MESH_ERROR' && event.data.error) {
-                        console.error('[TurntableGSViewer] Error from viewer:', event.data.error);
+                        console.error('[GSViewer] Error from viewer:', event.data.error);
                         if (infoPanel) {
                             infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error: ${event.data.error}</div>`;
                         }
@@ -340,7 +393,7 @@ app.registerExtension({
                 // Handle execution
                 const onExecuted = this.onExecuted;
                 this.onExecuted = function(message) {
-                    console.log("[TurntableGSViewer] onExecuted called with:", message);
+                    console.log("[GSViewer] onExecuted called with:", message);
                     onExecuted?.apply(this, arguments);
 
                     // Check for errors
@@ -386,7 +439,7 @@ app.registerExtension({
 
                         // Wire URL + iframe filename based on transport_format.
                         //   "ply" → ComfyUI's /view streams the raw PLY.
-                        //   "spz" → /turntablegsviewer/spz lazy-transcodes
+                        //   "spz" → /gsviewer/spz lazy-transcodes
                         //           via vendored spz-js (~9× smaller). On
                         //           first call the server pays the transcode
                         //           cost; subsequent calls hit the cached
@@ -397,7 +450,7 @@ app.registerExtension({
                         // honest).
                         let filepath, iframeFilename, loadLabel;
                         if (transportFormat === "spz") {
-                            filepath       = `/turntablegsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                            filepath       = `/gsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
                             iframeFilename = filename.replace(/\.ply$/i, ".spz");
                             loadLabel      = "Transcoding + downloading SPZ...";
                         } else {
@@ -409,7 +462,7 @@ app.registerExtension({
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
                             if (!iframe.contentWindow) {
-                                console.error("[TurntableGSViewer] Iframe contentWindow not available");
+                                console.error("[GSViewer] Iframe contentWindow not available");
                                 return;
                             }
 
@@ -417,11 +470,11 @@ app.registerExtension({
                                 // Fetch the file from parent context (authenticated).
                                 // Stream so we can log download progress.
                                 const t0 = performance.now();
-                                console.log("[TurntableGSViewer] fetch start:", filepath);
+                                console.log("[GSViewer] fetch start:", filepath);
                                 node._showLoadBar?.(loadLabel);
                                 const response = await fetch(filepath);
                                 if (!response.ok) {
-                                    // Bubble the server's body up — for /turntablegsviewer/spz
+                                    // Bubble the server's body up — for /gsviewer/spz
                                     // we put an actionable message there (e.g. "spz not installed").
                                     let body = "";
                                     try { body = (await response.text() || "").slice(0, 400); } catch (_) {}
@@ -429,7 +482,7 @@ app.registerExtension({
                                 }
                                 const totalHdr = response.headers.get("content-length");
                                 const total = totalHdr ? parseInt(totalHdr, 10) : 0;
-                                console.log(`[TurntableGSViewer] fetch response 200; content-length=${total || "unknown"}`);
+                                console.log(`[GSViewer] fetch response 200; content-length=${total || "unknown"}`);
 
                                 const chunks = [];
                                 let received = 0;
@@ -448,13 +501,13 @@ app.registerExtension({
                                             node._setLoadProgress?.(pct, `Downloading: ${mb} / ${tmb} MB`);
                                             const ipct = Math.floor(pct);
                                             if (ipct !== lastPctLogged && (ipct % 5 === 0 || ipct === 100)) {
-                                                console.log(`[TurntableGSViewer] download ${ipct}%  ${mb}/${tmb} MB`);
+                                                console.log(`[GSViewer] download ${ipct}%  ${mb}/${tmb} MB`);
                                                 lastPctLogged = ipct;
                                             }
                                         } else {
                                             node._setLoadProgress?.(50, `Downloading: ${(received/(1024*1024)).toFixed(1)} MB`);
                                             if (chunks.length % 64 === 0) {
-                                                console.log(`[TurntableGSViewer] downloaded ${(received/(1024*1024)).toFixed(1)} MB so far`);
+                                                console.log(`[GSViewer] downloaded ${(received/(1024*1024)).toFixed(1)} MB so far`);
                                             }
                                         }
                                     }
@@ -466,12 +519,12 @@ app.registerExtension({
                                 const arrayBuffer = u8.buffer;
                                 const dt = performance.now() - t0;
                                 const speed = received > 0 ? (received / (1024*1024)) / (dt / 1000) : 0;
-                                console.log(`[TurntableGSViewer] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
+                                console.log(`[GSViewer] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
 
                                 // Send the data to iframe — filename carries
                                 // the extension so the renderer can sniff
                                 // format (Spark/PlayCanvas both auto-detect).
-                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", iframeFilename);
+                                console.log("[GSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", iframeFilename);
                                 node._setLoadProgress?.(100, "Parsing splats...");
                                 iframe.contentWindow.postMessage({
                                     type: "LOAD_MESH_DATA",
@@ -483,7 +536,7 @@ app.registerExtension({
                                     timestamp: Date.now()
                                 }, "*", [arrayBuffer]);
                             } catch (error) {
-                                console.error("[TurntableGSViewer] Error fetching splat:", error);
+                                console.error("[GSViewer] Error fetching splat:", error);
                                 infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading splat: ${error.message}</div>`;
                             }
                         };

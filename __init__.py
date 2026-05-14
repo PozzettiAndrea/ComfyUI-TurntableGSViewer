@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""ComfyUI-TurntableGSViewer — tiny Gaussian-splat turntable viewer node."""
+"""ComfyUI-GSViewer — tiny Gaussian-splat turntable viewer node."""
 
 from .preview_gaussian import PreviewGaussians
 from .spz_route import register_routes as _register_spz_route

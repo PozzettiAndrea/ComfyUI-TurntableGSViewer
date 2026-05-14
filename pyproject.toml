@@ -1,16 +1,16 @@
 [project]
-name = "ComfyUI-TurntableGSViewer"
+name = "ComfyUI-GSViewer"
 description = "Tiny Gaussian Splat turntable viewer node for ComfyUI."
 version = "0.0.1"
 license = {file = "LICENSE"}
 
 [project.urls]
-Repository = "https://github.com/PozzettiAndrea/ComfyUI-TurntableGSViewer"
-Documentation = "https://github.com/PozzettiAndrea/ComfyUI-TurntableGSViewer"
+Repository = "https://github.com/PozzettiAndrea/ComfyUI-GSViewer"
+Documentation = "https://github.com/PozzettiAndrea/ComfyUI-GSViewer"
 
 [tool.comfy]
 PublisherId = "pozzettiandrea"
-DisplayName = "ComfyUI-TurntableGSViewer"
+DisplayName = "ComfyUI-GSViewer"
 Icon = ""
 includes = [] 
 
