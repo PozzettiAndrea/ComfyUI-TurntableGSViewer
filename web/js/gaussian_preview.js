@@ -208,23 +208,6 @@ app.registerExtension({
                     pendingRestoreJSON = savedCfg.state;
                 }
 
-                // Viewer-only "Use SPZ" preference, persisted to workflow JSON.
-                // Defaults to true (SPZ is much smaller for the same scene).
-                this.properties = this.properties || {};
-                if (typeof this.properties["Use SPZ"] !== "boolean") {
-                    this.properties["Use SPZ"] = true;
-                }
-                const getUseSPZ = () => !!this.properties["Use SPZ"];
-
-                const sendSettings = () => {
-                    if (!iframe.contentWindow) return;
-                    iframe.contentWindow.postMessage({
-                        type: "RESTORE_VIEWER_SETTINGS",
-                        settings: { useSPZ: getUseSPZ() },
-                    }, "*");
-                };
-                this._sendSettings = sendSettings;
-
                 // Iframe-display widget. serialize: false → never lands in
                 // widgets_values; we own persistence via node.properties.
                 const widget = this.addDOMWidget(
@@ -264,9 +247,6 @@ app.registerExtension({
                     // Push any pending saved camera state now that the iframe is alive
                     // (e.g. on workflow reload before the node has been re-queued).
                     sendRestore();
-                    // Also push the current SPZ toggle state so the checkbox
-                    // reflects the workflow's saved preference.
-                    sendSettings();
                 });
 
                 // Listen for messages from iframe
@@ -276,21 +256,6 @@ app.registerExtension({
                     // node's state.
                     if (event.source !== iframe.contentWindow) return;
 
-                    // Settings toggle (currently just SPZ compression) from
-                    // iframe → persist on node.properties + re-fetch.
-                    if (event.data?.type === "SETTING_CHANGED" && event.data.key) {
-                        const key = event.data.key;
-                        if (key === "useSPZ") {
-                            node.properties = node.properties || {};
-                            node.properties["Use SPZ"] = !!event.data.value;
-                            console.log("[TurntableGSViewer] Use SPZ ->", node.properties["Use SPZ"]);
-                            // Re-fetch with the new format if a PLY is loaded.
-                            if (typeof node._reloadSplat === "function") {
-                                node._reloadSplat();
-                            }
-                        }
-                        return;
-                    }
                     // Camera-state pushes from iframe → persist on
                     // node.properties["Camera Config"] (Load3D pattern).
                     if (event.data?.type === "CAMERA_STATE" && event.data.state) {
@@ -418,25 +383,12 @@ app.registerExtension({
                             </div>
                         `;
 
-                        // Build a fetch URL based on the current SPZ toggle.
-                        //   ON  → /turntablegsviewer/spz (lazy server-side transcode + cache)
-                        //   OFF → ComfyUI's /view endpoint, raw PLY
-                        // The iframe picks SceneFormat from the extension in
-                        // `filename`, so we also flip that.
-                        const buildFetchPlan = () => {
-                            if (getUseSPZ()) {
-                                return {
-                                    url: `/turntablegsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`,
-                                    filename: filename.replace(/\.ply$/i, ".spz"),
-                                    label: "Compressing / downloading SPZ...",
-                                };
-                            }
-                            return {
-                                url: `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`,
-                                filename: filename,
-                                label: "Downloading PLY...",
-                            };
-                        };
+                        // ComfyUI's /view endpoint streams the file LiTo wrote.
+                        // Format choice (PLY / SPZ / compressed.ply) is decided
+                        // at export time inside LiTo — the iframe just gets
+                        // bytes and auto-detects via the renderer.
+                        const filepath = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                        const loadLabel = "Downloading splat...";
 
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
@@ -445,18 +397,19 @@ app.registerExtension({
                                 return;
                             }
 
-                            const plan = buildFetchPlan();
-                            const filepath = plan.url;
-
                             try {
                                 // Fetch the file from parent context (authenticated).
-                                // Stream so we can log download progress (often >200 MB for PLY).
+                                // Stream so we can log download progress.
                                 const t0 = performance.now();
                                 console.log("[TurntableGSViewer] fetch start:", filepath);
-                                node._showLoadBar?.(plan.label);
+                                node._showLoadBar?.(loadLabel);
                                 const response = await fetch(filepath);
                                 if (!response.ok) {
-                                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                                    // Bubble the server's body up — for /turntablegsviewer/spz
+                                    // we put an actionable message there (e.g. "spz not installed").
+                                    let body = "";
+                                    try { body = (await response.text() || "").slice(0, 400); } catch (_) {}
+                                    throw new Error(`HTTP ${response.status}: ${response.statusText}${body ? " - " + body : ""}`);
                                 }
                                 const totalHdr = response.headers.get("content-length");
                                 const total = totalHdr ? parseInt(totalHdr, 10) : 0;
@@ -499,15 +452,15 @@ app.registerExtension({
                                 const speed = received > 0 ? (received / (1024*1024)) / (dt / 1000) : 0;
                                 console.log(`[TurntableGSViewer] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
 
-                                // Send the data to iframe with camera parameters.
-                                // `plan.filename` is `.spz` or `.ply` so the
-                                // adapter can pick SceneFormat.
-                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", plan.filename);
+                                // Send the data to iframe — filename carries
+                                // the extension so the renderer can sniff
+                                // format (Spark/PlayCanvas both auto-detect).
+                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", filename);
                                 node._setLoadProgress?.(100, "Parsing splats...");
                                 iframe.contentWindow.postMessage({
                                     type: "LOAD_MESH_DATA",
                                     data: arrayBuffer,
-                                    filename: plan.filename,
+                                    filename: filename,
                                     extrinsics: extrinsics,
                                     intrinsics: intrinsics,
                                     renderer: renderer,
@@ -518,9 +471,6 @@ app.registerExtension({
                                 infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading splat: ${error.message}</div>`;
                             }
                         };
-
-                        // Expose so the SPZ toggle handler can re-fetch.
-                        node._reloadSplat = fetchAndSend;
 
                         // Fetch and send when iframe is ready
                         if (iframeLoaded) {

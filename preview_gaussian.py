@@ -46,11 +46,17 @@ class PreviewGaussians:
                 "image_height": ("INT", {
                     "default": 512, "min": 64, "max": 4096, "step": 8,
                 }),
-                "renderer": (["webgl2", "webgpu"], {
-                    "default": "webgl2",
-                    "tooltip": "webgl2 = universal compatibility (mkkellogg/GaussianSplats3D); "
-                               "webgpu = faster on Chrome/Safari (PlayCanvas), "
-                               "falls back to webgl2 if the browser lacks WebGPU support",
+                "renderer": (["spark", "playcanvas"], {
+                    "default": "spark",
+                    "tooltip": (
+                        "spark — Three.js + WebGL2. Best SH3 fidelity, "
+                        "auto-detects all formats (PLY, compressed.ply, SPZ, "
+                        "KSPLAT, SOG, SPLAT). "
+                        "\n"
+                        "playcanvas — WebGPU path (currently falls back to "
+                        "spark; real adapter pending). Will win on large "
+                        "scenes (5M+ splats) when implemented."
+                    ),
                 }),
             },
         }

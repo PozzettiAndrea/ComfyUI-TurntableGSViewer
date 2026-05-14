@@ -155,6 +155,16 @@
             padding-bottom: 4px;
         }
     </style>
+
+    <!-- ES-module import map so Spark can find `three` -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./js/three.module.min.js",
+            "three/addons/controls/OrbitControls.js": "./js/OrbitControls.js"
+        }
+    }
+    </script>
 </head>
 <body>
     <div id="viewerContainer">
@@ -183,13 +193,6 @@
                 <input type="range" id="opacityRange" min="0.05" max="1" step="0.01" value="1.0">
                 <input type="number" id="opacityInput" min="0.05" max="1" step="0.01" value="1.0">
             </div>
-            <div class="row" style="grid-template-columns: 70px 1fr;">
-                <label for="useSpz">SPZ</label>
-                <label style="display:flex;align-items:center;gap:6px;color:#aaa;cursor:pointer;">
-                    <input type="checkbox" id="useSpz" checked>
-                    <span style="font-size:10px;">Compress (~6× smaller, lossy)</span>
-                </label>
-            </div>
         </div>
     </div>
 
@@ -207,34 +210,49 @@
         <button id="screenshot" title="Take screenshot">Screenshot</button>
     </div>
 
-    <script>
+    <script type="module">
     // ============================================================
-    // Gaussian Splat Viewer — dual backend (WebGL2 + WebGPU)
+    // Gaussian Splat Viewer — Spark (Three.js + WebGL2)
     //
-    // Two renderers are bundled but only the chosen one is loaded
-    // on the first LOAD_MESH_DATA postMessage:
-    //   - WebGL2: Three.js + mkkellogg/GaussianSplats3D (SH=3)
-    //   - WebGPU: PlayCanvas engine (gsplat component, SH=3)
+    // Renderer is @sparkjsdev/spark — auto-detects file format
+    // (PLY / compressed.ply / SPZ / SPLAT / KSPLAT / SOG / ZIP / RAD)
+    // from header bytes, and preserves SH3 better than mkkellogg's
+    // SPZ-quantized path.
     //
-    // The rest of the viewer (camera persistence, settings panel,
-    // axis buttons, screenshot, info panel) speaks to a small
-    // adapter interface so the rendering library can be swapped at
-    // runtime without rewiring the UI.
+    // The renderer dropdown still has a `webgpu` option; for now it
+    // logs a fallback warning and uses Spark (WebGL2). A real
+    // PlayCanvas WebGPU adapter is a follow-up.
     // ============================================================
 
-    const canvas       = document.getElementById('canvas');
-    const errorEl      = document.getElementById('error');
-    const infoPanel    = document.getElementById('infoPanel');
-    const infoContent  = document.getElementById('infoContent');
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { SparkRenderer, SplatMesh } from './js/spark.module.min.js';
+
+    // Lazy <script> loader for non-module bundles (PlayCanvas).
+    const _loaded = new Set();
+    function loadScript(src) {
+        if (_loaded.has(src)) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src; s.async = false;
+            s.onload  = () => { _loaded.add(src); resolve(); };
+            s.onerror = () => reject(new Error("Failed to load " + src));
+            document.head.appendChild(s);
+        });
+    }
+
+    const canvas        = document.getElementById('canvas');
+    const errorEl       = document.getElementById('error');
+    const infoPanel     = document.getElementById('infoPanel');
+    const infoContent   = document.getElementById('infoContent');
     const settingsPanel = document.getElementById('settingsPanel');
-    const settingsBtn  = document.getElementById('settingsBtn');
-    const fovRange     = document.getElementById('fovRange');
-    const fovInput     = document.getElementById('fovInput');
-    const scaleRange   = document.getElementById('scaleRange');
-    const scaleInput   = document.getElementById('scaleInput');
-    const opacityRange = document.getElementById('opacityRange');
-    const opacityInput = document.getElementById('opacityInput');
-    const useSpzCheck  = document.getElementById('useSpz');
+    const settingsBtn   = document.getElementById('settingsBtn');
+    const fovRange      = document.getElementById('fovRange');
+    const fovInput      = document.getElementById('fovInput');
+    const scaleRange    = document.getElementById('scaleRange');
+    const scaleInput    = document.getElementById('scaleInput');
+    const opacityRange  = document.getElementById('opacityRange');
+    const opacityInput  = document.getElementById('opacityInput');
 
     canvas.tabIndex = 0;
     canvas.style.outline = "none";
@@ -247,99 +265,49 @@
     }
 
     // ---- shared viewer state ------------------------------------
-    let adapter        = null;            // current renderer adapter
+    let adapter        = null;
     let adapterReady   = false;
-    let pendingRestore = null;            // applied right after the next splat load
+    let pendingRestore = null;
     let currentFovDeg  = 50;
     let currentScale   = 20.0;
     let currentOpacity = 1.0;
-    let initialPose    = null;            // { pos, target, fov } captured at framing time
-    const DEFAULT_SCALE_MULTIPLIER = 20.0;
+    let initialPose    = null;
 
     function setFovInputs(v)     { fovRange.value = v;     fovInput.value = v; }
     function setScaleInputs(v)   { scaleRange.value = v;   scaleInput.value = v; }
     function setOpacityInputs(v) { opacityRange.value = v; opacityInput.value = v; }
 
-    // ---- script loader (UMD libs, ordered) ----------------------
-    const _loaded = new Set();
-    function loadScript(src) {
-        if (_loaded.has(src)) return Promise.resolve();
-        return new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = src; s.async = false;
-            s.onload = () => { _loaded.add(src); resolve(); };
-            s.onerror = () => reject(new Error("Failed to load " + src));
-            document.head.appendChild(s);
-        });
-    }
-
-    async function bootRenderer(kind) {
-        // Phase-A0d: until a real PlayCanvas adapter ships, "webgpu" is a
-        // synonym for "webgl2". Doing the fallback at the bootloader level
-        // (instead of in PCSplatAdapter) avoids loading three.min.js twice
-        // and the "Multiple instances of Three.js" warning that comes with
-        // it.
-        if (kind === "webgpu") {
-            console.warn("[GaussianViewer] webgpu requested; falling back to webgl2 "
-                       + "(PlayCanvas adapter not implemented yet)");
-            kind = "webgl2";
-        }
-        await loadScript("./js/three.min.js");
-        await loadScript("./js/gaussian-splats-3d.umd.js");
-        return new MkkelloggAdapter(canvas);
-    }
-
     // ============================================================
-    // Adapter: WebGL2 — mkkellogg/GaussianSplats3D + Three.js
+    // Base: Three.js scene + camera + WebGLRenderer + OrbitControls
     // ============================================================
-    class MkkelloggAdapter {
+    class ThreeBaseAdapter {
         constructor(canvas) {
             this.canvas = canvas;
-            this.viewer = null;
+            this.scene = null;
+            this.camera = null;
+            this.renderer = null;
+            this.controls = null;
             this.splatMesh = null;
+            this._frameCount = 0;
+            this._raf = null;
         }
-        kind() { return "webgl2"; }
-
-        init() {
-            const GS = window["Gaussian Splats 3D"];
-            if (!GS) throw new Error("GaussianSplats3D library not loaded");
-            if (!window.THREE) throw new Error("THREE not loaded");
-
-            // Construct an external WebGLRenderer that targets OUR canvas so
-            // the iframe doesn't grow a second canvas next to it.
+        _initThree(logTag) {
             const W = this.canvas.clientWidth  || 512;
             const H = this.canvas.clientHeight || 512;
             const dpr = window.devicePixelRatio || 1;
-            console.log(`[Mkkellogg] init: canvas client=${W}x${H} dpr=${dpr.toFixed(2)} parent=#${this.canvas.parentElement?.id}`);
-            console.log(`[Mkkellogg] container has ${this.canvas.parentElement?.children.length} child(ren) before init`);
-
-            // Phase-A0a: WebGLRenderer construction can throw with
-            // "Web page caused context loss and was blocked" when Chrome's
-            // per-tab anti-DoS guard has been tripped by repeated iframe
-            // reloads. Catch it, paint a clear error overlay, and bubble
-            // the failure to the parent so the loading bar turns red.
+            console.log(`[${logTag}] init: canvas client=${W}x${H} dpr=${dpr.toFixed(2)}`);
             let renderer;
             try {
                 renderer = new THREE.WebGLRenderer({
                     canvas: this.canvas,
                     antialias: false,
                     alpha: false,
-                    // preserveDrawingBuffer:true so the canvas keeps its last
-                    // rendered frame on the screen during idle periods.
-                    // mkkellogg's selfDrivenUpdate only calls renderer.render
-                    // when shouldRender() reports a real reason to paint
-                    // (camera changed, visible-region fading in, etc.). On
-                    // idle frames it skips the render — and with the default
-                    // preserveDrawingBuffer:false, the browser compositor
-                    // clears the back buffer after composite, leaving us
-                    // with a black canvas. This costs a small amount of
-                    // memory bandwidth but matters for a static viewer.
                     preserveDrawingBuffer: true,
                 });
             } catch (err) {
                 const msg = "WebGL context creation refused — reload the ComfyUI tab once "
                           + "(Chrome anti-DoS guard). Detail: " + (err?.message || err);
-                console.error("[Mkkellogg] FATAL:", msg);
+                console.error(`[${logTag}] FATAL:`, msg);
                 showError(msg);
                 try {
                     window.parent.postMessage({ type: "MESH_ERROR", error: msg, timestamp: Date.now() }, "*");
@@ -349,14 +317,11 @@
             renderer.setPixelRatio(dpr);
             renderer.setSize(W, H, false);
             renderer.setClearColor(0x1a1a1a, 1.0);
-            console.log("[Mkkellogg] WebGLRenderer ready. drawingBufferSize=",
-                        renderer.domElement.width, "x", renderer.domElement.height);
+            this.renderer = renderer;
 
-            // Phase-A0b: surface context-loss events. preventDefault() in
-            // the lost handler is what lets the canvas come back later.
             this.canvas.addEventListener("webglcontextlost", (e) => {
                 e.preventDefault();
-                console.warn("[Mkkellogg] WebGL context LOST (preventDefault — waiting for restore)");
+                console.warn(`[${logTag}] WebGL context LOST`);
                 try {
                     window.parent.postMessage({
                         type: "MESH_ERROR",
@@ -366,212 +331,171 @@
                 } catch (_) {}
             });
             this.canvas.addEventListener("webglcontextrestored", () => {
-                console.log("[Mkkellogg] WebGL context RESTORED");
+                console.log(`[${logTag}] WebGL context RESTORED`);
             });
 
-            const camera = new THREE.PerspectiveCamera(50, W / Math.max(1, H), 0.05, 1000);
-            camera.position.set(0, 0, -3);
-            camera.lookAt(0, 0, 0);
+            this.scene = new THREE.Scene();
+            this.camera = new THREE.PerspectiveCamera(50, W / Math.max(1, H), 0.05, 1000);
+            this.camera.position.set(0, 0, -3);
+            this.camera.lookAt(0, 0, 0);
 
-            // Phase-A A3: ?upY=-1 in the iframe URL flips the camera-up
-            // probe (LiTo may be Y-down). Default is Y-up.
-            const _upY = new URLSearchParams(location.search).get("upY");
-            const _camUp = _upY === "-1" ? [0, -1, 0] : [0, 1, 0];
-            console.log("[Mkkellogg] cameraUp =", _camUp, "(set ?upY=-1 in iframe src to flip)");
+            this.controls = new OrbitControls(this.camera, this.canvas);
+            this.controls.enableDamping = false;
+            this.controls.target.set(0, 0, 0);
+            this.controls.update();
 
-            // gpuAcceleratedSort:true is incompatible with this version of
-            // mkkellogg/GaussianSplats3D when the caller provides its own
-            // renderer. With gpuAcceleratedSort=true the splat centers are
-            // never uploaded to the sort worker, the worker's
-            // uploadedSplatCount stays 0, and every sort returns
-            // splatRenderCount=0 → drawRange.count=0 → zero draw calls →
-            // black canvas. (Found via Playwright trace: updateRenderIndexes
-            // was called with renderSplatCount=0.) Fall back to CPU-side
-            // distance computation, which does upload centers.
-            this.viewer = new GS.Viewer({
-                renderer: renderer,
-                camera: camera,
-                useBuiltInControls: true,
-                sphericalHarmonicsDegree: 3,
-                gpuAcceleratedSort: false,
-                sharedMemoryForWorkers: false,
-                ignoreDevicePixelRatio: false,
-                initialCameraPosition: [0, 0, -3],
-                initialCameraLookAt: [0, 0, 0],
-                cameraUp: _camUp,
-                selfDrivenMode: true,
-            });
-            console.log("[Mkkellogg] viewer constructed.");
-            this.viewer.start();
-            console.log("[Mkkellogg] viewer.start() returned. self-driven RAF active.");
-
-            // Heartbeat: count rendered frames; log first one + every 60th.
-            this._frameCount = 0;
-            const origUpdate = this.viewer.selfDrivenUpdateFunc;
-            this.viewer.selfDrivenUpdateFunc = (...args) => {
-                origUpdate.apply(this.viewer, args);
-                this._frameCount += 1;
-                if (this._frameCount === 1) console.log("[Mkkellogg] first frame rendered.");
-                else if (this._frameCount % 60 === 0) {
-                    console.log(`[Mkkellogg] heartbeat: ${this._frameCount} frames`);
-                }
-            };
-
-            // Re-bind the OrbitControls to our canvas so wheel/drag events on
-            // the correct element drive the camera.
-            if (this.viewer.controls && this.viewer.controls.domElement !== this.canvas) {
-                this.viewer.controls.domElement = this.canvas;
-            }
-
-            // Resize-observer keeps the renderer matching the canvas size.
             const ro = new ResizeObserver(() => {
                 const w = this.canvas.clientWidth  || 1;
                 const h = this.canvas.clientHeight || 1;
                 renderer.setSize(w, h, false);
-                camera.aspect = w / Math.max(1, h);
-                camera.updateProjectionMatrix();
+                this.camera.aspect = w / Math.max(1, h);
+                this.camera.updateProjectionMatrix();
             });
             ro.observe(this.canvas);
         }
-
-        async loadSplat(blobUrl, filename) {
-            const GS = window["Gaussian Splats 3D"];
-            const isSpz = typeof filename === "string" && filename.toLowerCase().endsWith(".spz");
-            const sceneFormat = isSpz ? GS.SceneFormat.Spz : GS.SceneFormat.Ply;
-
-            // addSplatScene() appends to the existing scene list; if the
-            // user runs the workflow twice or swaps inputs, the old splats
-            // would stick around and overlap the new ones. Tear down any
-            // existing scenes first.
-            const existingSceneCount = this.viewer.getSceneCount ? this.viewer.getSceneCount() : 0;
-            if (existingSceneCount > 0) {
-                const idxs = [];
-                for (let i = 0; i < existingSceneCount; i++) idxs.push(i);
-                console.log(`[Mkkellogg] removing ${existingSceneCount} existing scene(s) before reload`);
-                try { await this.viewer.removeSplatScenes(idxs, false); }
-                catch (e) { console.warn("[Mkkellogg] removeSplatScenes failed:", e?.message || e); }
-            }
-
-            console.log(`[Mkkellogg] addSplatScene starting (format=${isSpz ? "spz" : "ply"})...`);
-            const t0 = performance.now();
-            await this.viewer.addSplatScene(blobUrl, {
-                format: sceneFormat,
-                showLoadingUI: false,
-                progressiveLoad: false,
-                // Phase-A A1: was 5/255; mkkellogg's default cuts off any
-                // splat whose post-sigmoid alpha is below ~2 %. LiTo's
-                // opacity distribution may sit near that boundary and lose
-                // most of the cloud. Keep all splats for now.
-                splatAlphaRemovalThreshold: 0,
-            });
-            const dt = performance.now() - t0;
-            this.splatMesh = this.viewer.splatMesh;
-            const splatCount = this.splatMesh?.getSplatCount?.() ?? 0;
-            const sceneCount = this.splatMesh?.getSceneCount?.() ?? 0;
-            console.log(`[Mkkellogg] addSplatScene resolved in ${dt.toFixed(0)} ms, `
-                      + `${splatCount} splats across ${sceneCount} scene(s).`);
-
-            const container = this.canvas.parentElement;
-            console.log("[Mkkellogg] container children after load:",
-                Array.from(container.children)
-                     .map(c => c.tagName.toLowerCase() + (c.id ? "#" + c.id : "")).join(", "));
-            console.log("[Mkkellogg] canvas: client=",
-                        this.canvas.clientWidth, "x", this.canvas.clientHeight,
-                        " drawing=", this.canvas.width, "x", this.canvas.height);
-        }
-
-        getBounds() {
-            if (!this.splatMesh) return null;
-            // mkkellogg's splatMesh is a shader-driven mesh; its Three.js
-            // bounding box is empty. We sample the splat centers and use
-            // 1st/99th percentile per axis as the framing bounds — strict
-            // min/max gets blown out by a handful of outlier "background"
-            // splats and leaves the actual object as a tiny dot in the
-            // frame.
-            const n = this.splatMesh.getSplatCount();
-            if (!n) return null;
-            const v = new THREE.Vector3();
-            const step = (n > 50000) ? Math.ceil(n / 50000) : 1;
-            const xs = [], ys = [], zs = [];
-            for (let i = 0; i < n; i += step) {
-                this.splatMesh.getSplatCenter(i, v);
-                xs.push(v.x); ys.push(v.y); zs.push(v.z);
-            }
-            if (!xs.length) return null;
-            const cmp = (a, b) => a - b;
-            xs.sort(cmp); ys.sort(cmp); zs.sort(cmp);
-            const k = xs.length;
-            // 5/95 percentile — Gaussian-splat scenes often have a thin
-            // halo of low-opacity splats well outside the actual object;
-            // strict min/max (or 1/99) leaves them dominating the bounds.
-            const lo = Math.floor(k * 0.05), hi = Math.floor(k * 0.95);
-            const minX = xs[lo], maxX = xs[hi];
-            const minY = ys[lo], maxY = ys[hi];
-            const minZ = zs[lo], maxZ = zs[hi];
-            return {
-                center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 },
-                size:   { x: maxX - minX,       y: maxY - minY,       z: maxZ - minZ },
+        _startRenderLoop(logTag) {
+            const tick = () => {
+                this._raf = requestAnimationFrame(tick);
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+                this._frameCount += 1;
+                if (this._frameCount === 1) console.log(`[${logTag}] first frame rendered.`);
+                else if (this._frameCount % 120 === 0) console.log(`[${logTag}] heartbeat: ${this._frameCount} frames`);
             };
+            tick();
         }
-
         getCameraPosition() {
-            const p = this.viewer.camera.position;
+            const p = this.camera.position;
             return { x: p.x, y: p.y, z: p.z };
         }
-        setCameraPosition(x, y, z) {
-            this.viewer.camera.position.set(x, y, z);
-        }
+        setCameraPosition(x, y, z) { this.camera.position.set(x, y, z); }
         getCameraTarget() {
-            const t = this.viewer.controls?.target;
-            return t ? { x: t.x, y: t.y, z: t.z } : { x: 0, y: 0, z: 0 };
+            const t = this.controls.target;
+            return { x: t.x, y: t.y, z: t.z };
         }
         setCameraTarget(x, y, z) {
-            if (this.viewer.controls) {
-                this.viewer.controls.target.set(x, y, z);
-                this.viewer.controls.update();
-            }
+            this.controls.target.set(x, y, z);
+            this.controls.update();
         }
         setFov(deg) {
-            this.viewer.camera.fov = deg;
-            this.viewer.camera.updateProjectionMatrix();
+            this.camera.fov = deg;
+            this.camera.updateProjectionMatrix();
         }
-        // TODO(v2): per-splat scale / opacity mutation against
-        // splatMesh.splatBuffer. The slider events still fire so we
-        // keep the UI live; visual effect lands in a follow-up.
-        setScaleMultiplier(_f)   { /* no-op for v1 */ }
-        setOpacityMultiplier(_f) { /* no-op for v1 */ }
         screenshot() {
-            return this.viewer.renderer.domElement.toDataURL("image/png");
+            this.renderer.render(this.scene, this.camera);
+            return this.renderer.domElement.toDataURL("image/png");
         }
     }
 
     // ============================================================
-    // Adapter: WebGPU — PlayCanvas (stub for v1)
+    // Adapter: Spark — best SH3 fidelity, all formats
     // ============================================================
-    class PCSplatAdapter {
+    class SparkAdapter extends ThreeBaseAdapter {
         constructor(canvas) {
-            console.warn("[GaussianViewer] PCSplatAdapter (WebGPU) is a stub in v1; "
-                       + "falling back to mkkellogg WebGL2 path.");
+            super(canvas);
+            this.sparkRenderer = null;
+        }
+        kind() { return "spark"; }
+
+        init() {
+            this._initThree("Spark");
+            // SparkRenderer is itself a THREE.Mesh — adding it to the scene
+            // hooks its onBeforeRender for per-frame splat sort / LOD work.
+            this.sparkRenderer = new SparkRenderer({ renderer: this.renderer });
+            this.scene.add(this.sparkRenderer);
+            this._startRenderLoop("Spark");
+        }
+
+        async loadSplat(blobUrl, filename) {
+            // Replace any existing scene.
+            if (this.splatMesh) {
+                console.log("[Spark] removing existing SplatMesh before reload");
+                this.scene.remove(this.splatMesh);
+                try { this.splatMesh.dispose(); } catch (_) {}
+                this.splatMesh = null;
+            }
+
+            console.log(`[Spark] new SplatMesh url=${filename}`);
+            const t0 = performance.now();
+            const splatMesh = new SplatMesh({
+                url: blobUrl,
+                fileName: filename,    // hint for Spark's format sniff (also reads bytes)
+                onProgress: (e) => {
+                    if (e?.total) {
+                        const pct = (e.loaded / e.total) * 100;
+                        if (Math.floor(pct) % 10 === 0) {
+                            console.log(`[Spark] parse ${pct.toFixed(0)}%`);
+                        }
+                    }
+                },
+            });
+            this.scene.add(splatMesh);
+            await splatMesh.initialized;
+            this.splatMesh = splatMesh;
+
+            const dt = performance.now() - t0;
+            console.log(`[Spark] loaded ${splatMesh.numSplats} splats in ${dt.toFixed(0)} ms`);
+        }
+
+        getBounds() {
+            if (!this.splatMesh) return null;
+            let bbox;
+            try { bbox = this.splatMesh.getBoundingBox(true); } catch (e) {
+                console.warn("[Spark] getBoundingBox failed:", e?.message);
+                return null;
+            }
+            if (!bbox || bbox.isEmpty()) return null;
+            const min = bbox.min, max = bbox.max;
+            return {
+                center: { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 },
+                size:   { x: max.x - min.x,       y: max.y - min.y,       z: max.z - min.z },
+            };
+        }
+
+        // Spark per-mesh splatScale / splatOpacity multipliers.
+        setScaleMultiplier(f) {
+            if (this.splatMesh) this.splatMesh.splatScale = f / 20.0;
+        }
+        setOpacityMultiplier(f) {
+            if (this.splatMesh) this.splatMesh.splatOpacity = f;
+        }
+    }
+
+    // ============================================================
+    // Adapter: PlayCanvas Engine — WebGPU (TODO real impl)
+    // ============================================================
+    class PlayCanvasAdapter {
+        constructor(canvas) {
             this.canvas = canvas;
             this._fallback = null;
         }
-        kind() { return "webgl2-fallback"; }
+        kind() { return "playcanvas-fallback"; }
         async init() {
-            await loadScript("./js/three.min.js");
-            await loadScript("./js/gaussian-splats-3d.umd.js");
-            this._fallback = new MkkelloggAdapter(this.canvas);
+            console.warn("[PlayCanvas] adapter not yet implemented; falling back to Spark.");
+            this._fallback = new SparkAdapter(this.canvas);
             this._fallback.init();
         }
-        async loadSplat(u, f)      { return this._fallback.loadSplat(u, f); }
-        getBounds()                { return this._fallback.getBounds(); }
-        getCameraPosition()        { return this._fallback.getCameraPosition(); }
-        setCameraPosition(x,y,z)   { return this._fallback.setCameraPosition(x,y,z); }
-        getCameraTarget()          { return this._fallback.getCameraTarget(); }
-        setCameraTarget(x,y,z)     { return this._fallback.setCameraTarget(x,y,z); }
-        setFov(d)                  { return this._fallback.setFov(d); }
-        setScaleMultiplier(f)      { return this._fallback.setScaleMultiplier(f); }
-        setOpacityMultiplier(f)    { return this._fallback.setOpacityMultiplier(f); }
-        screenshot()               { return this._fallback.screenshot(); }
+        async loadSplat(u, f) { return this._fallback.loadSplat(u, f); }
+        getBounds()           { return this._fallback.getBounds(); }
+        getCameraPosition()   { return this._fallback.getCameraPosition(); }
+        setCameraPosition(x,y,z) { return this._fallback.setCameraPosition(x,y,z); }
+        getCameraTarget()     { return this._fallback.getCameraTarget(); }
+        setCameraTarget(x,y,z){ return this._fallback.setCameraTarget(x,y,z); }
+        setFov(d)             { return this._fallback.setFov(d); }
+        setScaleMultiplier(f) { return this._fallback.setScaleMultiplier(f); }
+        setOpacityMultiplier(f){ return this._fallback.setOpacityMultiplier(f); }
+        screenshot()          { return this._fallback.screenshot(); }
+        get scene()           { return this._fallback?.scene; }
+        get camera()          { return this._fallback?.camera; }
+        get renderer()        { return this._fallback?.renderer; }
+        get splatMesh()       { return this._fallback?.splatMesh; }
+        get _frameCount()     { return this._fallback?._frameCount; }
+    }
+
+    async function bootRenderer(kind) {
+        if (kind === "playcanvas") return new PlayCanvasAdapter(canvas);
+        // Default + any unknown value -> Spark.
+        return new SparkAdapter(canvas);
     }
 
     // ============================================================
@@ -635,9 +559,6 @@
 
         const maxExtent = Math.max(b.size.x, b.size.y, b.size.z);
         const fovRad = fovDeg * Math.PI / 180;
-        // 1.15 leaves a small breathing border instead of jamming the
-        // object to the frame edges. Tighter than the 1.5 default which
-        // made the object look distant.
         const radius = Math.max(0.1, (maxExtent / 2) / Math.tan(fovRad / 2) * 1.15);
 
         adapter.setCameraPosition(b.center.x, b.center.y, b.center.z - radius);
@@ -679,13 +600,11 @@
         emitCameraState();
     }
 
-    // ---- slider updates -----------------------------------------
     function updateFov(v) {
         v = Math.max(5, Math.min(170, parseFloat(v) || 50));
         currentFovDeg = v;
         setFovInputs(v);
         if (adapterReady) {
-            // re-frame to keep the object filling roughly the same area
             const b = adapter.getBounds();
             if (b) frameOnBounds(v); else { adapter.setFov(v); emitCameraState(); }
         }
@@ -723,12 +642,9 @@
 
     async function loadPLYFromData(arrayBuffer, filename, extrinsics, intrinsics, renderer) {
         try {
-            const tEnsure0 = performance.now();
             console.log(`[GaussianViewer] ensureRenderer('${renderer || 'webgl2'}') starting...`);
             await ensureRenderer(renderer || "webgl2");
-            console.log(`[GaussianViewer] ensureRenderer done in ${(performance.now()-tEnsure0).toFixed(0)} ms`);
 
-            // Hand the byte buffer to the chosen adapter via a blob URL.
             const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
             const blobUrl = URL.createObjectURL(blob);
             try {
@@ -740,7 +656,6 @@
                 URL.revokeObjectURL(blobUrl);
             }
 
-            // Derive FOV from intrinsics if provided, else use current widget value.
             let fovDeg = currentFovDeg;
             if (intrinsics && Array.isArray(intrinsics) && intrinsics.length >= 2) {
                 const fy = intrinsics[1][1];
@@ -748,19 +663,13 @@
                 const h  = cy * 2;
                 fovDeg = 2 * Math.atan(h / (2 * fy)) * 180 / Math.PI;
             }
-            // Clamp telephoto / fisheye ends so a stale widget value can't push
-            // the camera to infinity or invert it. The slider lets users widen
-            // to 5° or narrow to 170° after load if they really want.
             fovDeg = Math.max(20, Math.min(120, fovDeg));
             setFovInputs(fovDeg);
             frameOnBounds(fovDeg);
 
-            // Apply current slider values (no-op in v1 for scale/opacity, but
-            // adapters can implement them later without changing this path).
             adapter.setScaleMultiplier(currentScale);
             adapter.setOpacityMultiplier(currentOpacity);
 
-            // Late-applied saved pose (overrides default framing).
             if (pendingRestore) {
                 applyCameraState(pendingRestore);
                 pendingRestore = null;
@@ -817,21 +726,8 @@
         }
     });
 
-    // Persist camera pose to workflow whenever the user interacts.
     canvas.addEventListener('pointerup',  () => emitCameraState());
     canvas.addEventListener('wheel',      () => emitCameraState(), { passive: true });
-
-    // SPZ toggle — flip → tell parent → parent re-fetches with the new
-    // format. Persistence (workflow JSON) is the parent's job.
-    useSpzCheck.addEventListener('change', (e) => {
-        const useSPZ = !!e.target.checked;
-        console.log('[GaussianViewer] SPZ toggle ->', useSPZ);
-        try {
-            window.parent.postMessage(
-                { type: 'SETTING_CHANGED', key: 'useSPZ', value: useSPZ }, '*',
-            );
-        } catch (_) {}
-    });
 
     // Receive from parent
     window.addEventListener('message', (event) => {
@@ -844,48 +740,33 @@
         } else if (msg.type === 'RESTORE_CAMERA_STATE' && msg.state) {
             if (adapterReady) applyCameraState(msg.state);
             else              pendingRestore = msg.state;
-        } else if (msg.type === 'RESTORE_VIEWER_SETTINGS' && msg.settings) {
-            // Parent owns the source of truth for viewer settings; sync UI
-            // without firing the change handler (which would loop).
-            if (typeof msg.settings.useSPZ === 'boolean') {
-                useSpzCheck.checked = msg.settings.useSPZ;
-            }
         }
     });
 
     console.log('[GaussianViewer] Ready — waiting for LOAD_MESH_DATA');
 
     // -------- Debug hooks (headless Playwright drives these) -----
-    // Closure-scoped vars (adapter, viewer, splatMesh) aren't visible
-    // from page.evaluate(); expose a getter so the harness can probe.
     window.__gs = {
         state() {
-            const m = adapter && adapter.splatMesh;
             return {
                 adapterReady,
                 adapterKind: adapter && adapter.kind && adapter.kind(),
-                splatCount: (m && m.getSplatCount && m.getSplatCount()) || 0,
-                sceneCount: (m && m.getSceneCount && m.getSceneCount()) || 0,
-                hasViewer: !!(adapter && adapter.viewer),
-                hasMaterial: !!(m && m.material),
-                materialType: m && m.material && m.material.type,
-                materialUniforms: m && m.material && m.material.uniforms ? Object.keys(m.material.uniforms) : null,
+                splatCount: adapter?.splatMesh?.numSplats ?? 0,
                 cameraPos: adapter ? adapter.getCameraPosition() : null,
                 cameraTarget: adapter ? adapter.getCameraTarget() : null,
                 fov: currentFovDeg,
                 frames: adapter && adapter._frameCount,
             };
         },
-        // Run a fn against the live adapter/viewer/splatMesh.
         run(fnSrc) {
-            // eslint-disable-next-line no-new-func
-            const fn = new Function('adapter', 'viewer', 'splatMesh', 'THREE', 'GS', fnSrc);
+            const fn = new Function('adapter', 'splatMesh', 'THREE', 'scene', 'camera', 'renderer', fnSrc);
             return fn(
                 adapter,
-                adapter && adapter.viewer,
                 adapter && adapter.splatMesh,
-                window.THREE,
-                window["Gaussian Splats 3D"],
+                THREE,
+                adapter && adapter.scene,
+                adapter && adapter.camera,
+                adapter && adapter.renderer,
             );
         },
     };

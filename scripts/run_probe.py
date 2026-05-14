@@ -39,18 +39,27 @@ def main():
         ctx = browser.new_context(viewport={"width": 1024, "height": 768})
         page = ctx.new_page()
         page.on("console", lambda m: print(f"  {m.text}") if "heartbeat" not in m.text else None)
+        page.on("requestfailed", lambda r: print(f"  [requestfailed] {r.url} - {r.failure}"))
+        page.on("response", lambda r: print(f"  [response {r.status}] {r.url}") if r.status >= 400 else None)
         page.goto(f"http://127.0.0.1:{PORT}/viewer_gaussian.html", wait_until="load")
         page.wait_for_function("typeof window.__gs === 'object'")
 
-        page.evaluate("""async () => {
+        # Pick the iframe-side filename to match the source extension so the
+        # adapter picks the right SceneFormat (.ply vs .spz).
+        ext = PLY_PATH.suffix.lower()
+        iframe_filename = f"t{ext}" if ext in (".ply", ".spz") else "t.ply"
+        import os as _os
+        chosen_renderer = _os.environ.get("RENDERER", "spark")
+        print(f"[harness] renderer: {chosen_renderer}")
+        page.evaluate("""async ({fname, rend}) => {
             window._loaded = false; window._error = null;
             addEventListener('message', e => {
                 if (e.data?.type === 'MESH_LOADED') window._loaded = true;
                 if (e.data?.type === 'MESH_ERROR')  window._error  = e.data.error;
             });
             const r = await fetch('/test.ply'); const buf = await r.arrayBuffer();
-            postMessage({ type:'LOAD_MESH_DATA', data: buf, filename:'t.ply', renderer:'webgl2' }, '*');
-        }""")
+            postMessage({ type: 'LOAD_MESH_DATA', data: buf, filename: fname, renderer: rend }, '*');
+        }""", {"fname": iframe_filename, "rend": chosen_renderer})
         page.wait_for_function("window._loaded || window._error", timeout=180000)
         page.wait_for_timeout(1500)
 
