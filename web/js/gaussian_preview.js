@@ -359,7 +359,8 @@ app.registerExtension({
                         // Extract camera parameters if provided
                         const extrinsics = message.extrinsics?.[0] || null;
                         const intrinsics = message.intrinsics?.[0] || null;
-                        const renderer = message.renderer?.[0] || "webgl2";
+                        const renderer = message.renderer?.[0] || "spark";
+                        const transportFormat = message.transport_format?.[0] || "ply";
 
                         // Resize node to match image aspect ratio from intrinsics
                         if (intrinsics && intrinsics[0] && intrinsics[1]) {
@@ -383,12 +384,27 @@ app.registerExtension({
                             </div>
                         `;
 
-                        // ComfyUI's /view endpoint streams the file LiTo wrote.
-                        // Format choice (PLY / SPZ / compressed.ply) is decided
-                        // at export time inside LiTo — the iframe just gets
-                        // bytes and auto-detects via the renderer.
-                        const filepath = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
-                        const loadLabel = "Downloading splat...";
+                        // Wire URL + iframe filename based on transport_format.
+                        //   "ply" → ComfyUI's /view streams the raw PLY.
+                        //   "spz" → /turntablegsviewer/spz lazy-transcodes
+                        //           via vendored spz-js (~9× smaller). On
+                        //           first call the server pays the transcode
+                        //           cost; subsequent calls hit the cached
+                        //           sibling .spz file.
+                        // The iframe filename gets the matching extension so
+                        // the renderer's auto-detect (Spark sniffs bytes
+                        // either way, but extension keeps the info panel
+                        // honest).
+                        let filepath, iframeFilename, loadLabel;
+                        if (transportFormat === "spz") {
+                            filepath       = `/turntablegsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                            iframeFilename = filename.replace(/\.ply$/i, ".spz");
+                            loadLabel      = "Transcoding + downloading SPZ...";
+                        } else {
+                            filepath       = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                            iframeFilename = filename;
+                            loadLabel      = "Downloading PLY...";
+                        }
 
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
@@ -455,12 +471,12 @@ app.registerExtension({
                                 // Send the data to iframe — filename carries
                                 // the extension so the renderer can sniff
                                 // format (Spark/PlayCanvas both auto-detect).
-                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", filename);
+                                console.log("[TurntableGSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", iframeFilename);
                                 node._setLoadProgress?.(100, "Parsing splats...");
                                 iframe.contentWindow.postMessage({
                                     type: "LOAD_MESH_DATA",
                                     data: arrayBuffer,
-                                    filename: filename,
+                                    filename: iframeFilename,
                                     extrinsics: extrinsics,
                                     intrinsics: intrinsics,
                                     renderer: renderer,

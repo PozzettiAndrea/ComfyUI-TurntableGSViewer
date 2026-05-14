@@ -58,6 +58,20 @@ class PreviewGaussians:
                         "scenes (5M+ splats) when implemented."
                     ),
                 }),
+                "transport_format": (["ply", "spz"], {
+                    "default": "ply",
+                    "tooltip": (
+                        "ply — lossless float32, ~225 MB for a 1M-splat SH=3 "
+                        "scene. Slow to download but every SH3 highlight is "
+                        "preserved bit-perfect from training. "
+                        "\n"
+                        "spz — server transcodes to SPZ v2 once and caches "
+                        "next to the PLY. ~9x smaller (~25 MB), but SH2/SH3 "
+                        "quantize to 4 bits each, which flattens specular "
+                        "highlights. Use when bandwidth matters more than "
+                        "view-dependent fidelity."
+                    ),
+                }),
             },
         }
 
@@ -66,7 +80,7 @@ class PreviewGaussians:
     FUNCTION = "preview"
     CATEGORY = "viewer"
 
-    def preview(self, ply_path, fov_degrees, image_width, image_height, renderer):
+    def preview(self, ply_path, fov_degrees, image_width, image_height, renderer, transport_format="ply"):
         if not ply_path:
             return {"ui": {"error": ["No PLY path provided"]}}
         if not os.path.exists(ply_path):
@@ -92,4 +106,5 @@ class PreviewGaussians:
             "intrinsics": [intrinsics],
             "fov_degrees": [fov_degrees],
             "renderer": [renderer],
+            "transport_format": [transport_format],
         }}
