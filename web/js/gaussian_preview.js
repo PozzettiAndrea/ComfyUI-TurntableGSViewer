@@ -100,47 +100,35 @@ app.registerExtension({
                 // `inputs[]` carries a `widget: {name}` annotation only on
                 // inputs that had widgets, so it's the authoritative
                 // ordering for widgets_values.
-                const savedValues = Array.isArray(info?.widgets_values) ? info.widgets_values : [];
-                const savedInputs = Array.isArray(info?.inputs) ? info.inputs : [];
-                const valueByName = {};
-                let valIdx = 0;
-                for (const inp of savedInputs) {
-                    if (inp && inp.widget && typeof inp.widget.name === "string") {
-                        valueByName[inp.widget.name] = savedValues[valIdx];
-                        valIdx++;
-                    }
-                }
-
-                console.log("[GSViewer-DEBUG] onConfigure: info.widgets_values =",
-                            JSON.stringify(savedValues));
-                console.log("[GSViewer-DEBUG] onConfigure: info.inputs name/widget =",
-                            JSON.stringify((savedInputs || []).map(
-                                (i) => ({ name: i?.name, w: i?.widget?.name }))));
-                console.log("[GSViewer-DEBUG] onConfigure: valueByName =",
-                            JSON.stringify(valueByName));
-                console.log("[GSViewer-DEBUG] onConfigure: this.widgets BEFORE original =",
-                            JSON.stringify((this.widgets || []).map(
-                                (w) => ({ name: w?.name, type: w?.type, value: w?.value }))));
-
                 const r = _origOnConfigure ? _origOnConfigure.apply(this, arguments) : undefined;
 
-                console.log("[GSViewer-DEBUG] onConfigure: this.widgets AFTER original =",
-                            JSON.stringify((this.widgets || []).map(
-                                (w) => ({ name: w?.name, value: w?.value }))));
-
-                // Reconcile by name: any widget whose name matches a saved
-                // entry gets the saved value (overriding the positional
-                // mis-pairing that configure() may have just applied).
+                // ComfyUI's widgetInputs extension strips one entry from
+                // info.widgets_values for `forceInput: True` inputs like
+                // ply_path. The strip silently corrupts the
+                // value->widget pairing (fov ends up with image_width's
+                // value, etc.). The disk file is correct; the in-memory
+                // info we receive is not.
+                //
+                // To survive that, we mirror every named widget into
+                // node.properties["Widget Values"] (same pattern as
+                // "Camera Config") on every change. On load we trust
+                // properties over info.widgets_values when available.
+                //
+                // For old workflows without "Widget Values", we also fall
+                // back to "Camera Config".fov which captures the fov the
+                // user was actually using.
+                this.properties = this.properties || {};
+                const saved = this.properties["Widget Values"] || {};
+                const camCfg = this.properties["Camera Config"] || {};
+                if (typeof camCfg.fov === "number" && saved.fov_degrees === undefined) {
+                    saved.fov_degrees = camCfg.fov;
+                }
                 for (const w of (this.widgets || [])) {
-                    if (w && w.name in valueByName) {
-                        const v = valueByName[w.name];
+                    if (w && w.name && w.name in saved) {
+                        const v = saved[w.name];
                         if (v !== undefined) w.value = v;
                     }
                 }
-
-                console.log("[GSViewer-DEBUG] onConfigure: this.widgets AFTER reconcile =",
-                            JSON.stringify((this.widgets || []).map(
-                                (w) => ({ name: w?.name, value: w?.value }))));
 
                 for (const w of (this.widgets || [])) {
                     const optsValues = w.options && Array.isArray(w.options.values);
@@ -207,6 +195,30 @@ app.registerExtension({
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+
+                // Mirror every named widget into node.properties["Widget
+                // Values"] so we survive ComfyUI's widget_values stripping
+                // (see onConfigure comment above). Apply current values
+                // immediately + wrap each widget's callback to keep the
+                // mirror up to date.
+                const TRACKED = new Set([
+                    "fov_degrees", "image_width", "image_height",
+                    "renderer", "transport_format",
+                ]);
+                this.properties = this.properties || {};
+                if (!this.properties["Widget Values"]) {
+                    this.properties["Widget Values"] = {};
+                }
+                const propVals = this.properties["Widget Values"];
+                for (const w of (this.widgets || [])) {
+                    if (!w || !TRACKED.has(w.name)) continue;
+                    if (propVals[w.name] === undefined) propVals[w.name] = w.value;
+                    const origCb = w.callback;
+                    w.callback = function(v) {
+                        propVals[w.name] = v;
+                        return origCb ? origCb.apply(this, arguments) : undefined;
+                    };
+                }
 
                 // Create container for viewer + info panel
                 const container = document.createElement("div");
