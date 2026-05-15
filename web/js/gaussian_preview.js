@@ -111,7 +111,22 @@ app.registerExtension({
                     }
                 }
 
+                console.log("[GSViewer-DEBUG] onConfigure: info.widgets_values =",
+                            JSON.stringify(savedValues));
+                console.log("[GSViewer-DEBUG] onConfigure: info.inputs name/widget =",
+                            JSON.stringify((savedInputs || []).map(
+                                (i) => ({ name: i?.name, w: i?.widget?.name }))));
+                console.log("[GSViewer-DEBUG] onConfigure: valueByName =",
+                            JSON.stringify(valueByName));
+                console.log("[GSViewer-DEBUG] onConfigure: this.widgets BEFORE original =",
+                            JSON.stringify((this.widgets || []).map(
+                                (w) => ({ name: w?.name, type: w?.type, value: w?.value }))));
+
                 const r = _origOnConfigure ? _origOnConfigure.apply(this, arguments) : undefined;
+
+                console.log("[GSViewer-DEBUG] onConfigure: this.widgets AFTER original =",
+                            JSON.stringify((this.widgets || []).map(
+                                (w) => ({ name: w?.name, value: w?.value }))));
 
                 // Reconcile by name: any widget whose name matches a saved
                 // entry gets the saved value (overriding the positional
@@ -122,6 +137,10 @@ app.registerExtension({
                         if (v !== undefined) w.value = v;
                     }
                 }
+
+                console.log("[GSViewer-DEBUG] onConfigure: this.widgets AFTER reconcile =",
+                            JSON.stringify((this.widgets || []).map(
+                                (w) => ({ name: w?.name, value: w?.value }))));
 
                 for (const w of (this.widgets || [])) {
                     const optsValues = w.options && Array.isArray(w.options.values);
