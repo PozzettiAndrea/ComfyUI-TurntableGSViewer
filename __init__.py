@@ -4,6 +4,7 @@
 
 from .preview_gaussian import PreviewGaussians
 from .merge_gaussians import GaussianMerge
+from .load_ply import LoadPLY
 from .spz_route import register_routes as _register_spz_route
 
 _register_spz_route()
@@ -13,11 +14,13 @@ WEB_DIRECTORY = "web"
 NODE_CLASS_MAPPINGS = {
     "PreviewGaussians": PreviewGaussians,
     "GaussianMerge": GaussianMerge,
+    "LoadPLY": LoadPLY,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PreviewGaussians": "Preview Gaussians",
     "GaussianMerge": "Gaussian Merge to Target",
+    "LoadPLY": "Load PLY",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
