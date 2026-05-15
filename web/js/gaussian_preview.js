@@ -1,5 +1,5 @@
 /**
- * ComfyUI-GSViewer - Gaussian Splat Preview Widget
+ * ComfyUI-GaussianPack - Gaussian Splat Preview Widget
  * Interactive 3D Gaussian Splatting viewer using gsplat.js
  */
 
@@ -10,13 +10,13 @@ import { api } from "../../../scripts/api.js";
 const EXTENSION_FOLDER = (() => {
     const url = import.meta.url;
     const match = url.match(/\/extensions\/([^/]+)\//);
-    return match ? match[1] : "ComfyUI-GSViewer";
+    return match ? match[1] : "ComfyUI-GaussianPack";
 })();
 
-console.log("[GSViewer] Loading extension...");
+console.log("[GaussianPack] Loading extension...");
 
 app.registerExtension({
-    name: "gsviewer.previewgaussians",
+    name: "gaussianpack.previewgaussians",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Auto-refresh PLY dropdown list for the file selector node
@@ -45,7 +45,7 @@ app.registerExtension({
                             app.graph.setDirtyCanvas(true, true);
                         }
                     } catch (e) {
-                        console.warn("[GSViewer] Failed to refresh PLY list", e);
+                        console.warn("[GaussianPack] Failed to refresh PLY list", e);
                     }
                 };
 
@@ -66,7 +66,7 @@ app.registerExtension({
         }
 
         if (nodeData.name === "PreviewGaussians") {
-            console.log("[GSViewer] Registering Preview Gaussians node");
+            console.log("[GaussianPack] Registering Preview Gaussians node");
 
             // After ComfyUI applies serialized widgets_values, defend
             // against stale workflow schemas. Two shapes have shipped
@@ -148,7 +148,7 @@ app.registerExtension({
                                 cfg.fov   = (typeof parsed.fov === "number") ? parsed.fov : (cfg.fov ?? 50);
                                 cfg.state = cfg.state || w.value;
                                 this.properties["Camera Config"] = cfg;
-                                console.warn("[GSViewer] rescued stranded camera state from widget",
+                                console.warn("[GaussianPack] rescued stranded camera state from widget",
                                              w.name, "-> properties['Camera Config']");
                                 w.value = w.options?.default
                                           ?? (optsValues ? w.options.values[0] : "");
@@ -162,7 +162,7 @@ app.registerExtension({
                         const def = (w.options.default !== undefined)
                                     ? w.options.default
                                     : w.options.values[0];
-                        console.warn("[GSViewer] resetting combo widget",
+                        console.warn("[GaussianPack] resetting combo widget",
                                      w.name, "(value", JSON.stringify(w.value), "not in options) ->", def);
                         w.value = def;
                         continue;
@@ -172,7 +172,7 @@ app.registerExtension({
                     if ((w.type === "number" || w.type === "INT" || w.type === "FLOAT")
                         && typeof w.value === "string") {
                         const def = w.options?.default;
-                        console.warn("[GSViewer] resetting corrupted widget",
+                        console.warn("[GaussianPack] resetting corrupted widget",
                                      w.name, "(was string) ->", def);
                         w.value = (def !== undefined) ? def : 0;
                     }
@@ -183,7 +183,7 @@ app.registerExtension({
                         const { min, max, default: def } = w.options;
                         if ((typeof min === "number" && w.value < min) ||
                             (typeof max === "number" && w.value > max)) {
-                            console.warn("[GSViewer] resetting out-of-range widget",
+                            console.warn("[GaussianPack] resetting out-of-range widget",
                                          w.name, w.value, "->", def);
                             w.value = (def !== undefined) ? def : (min ?? 0);
                         }
@@ -312,7 +312,7 @@ app.registerExtension({
                             { type: "RESTORE_CAMERA_STATE", state }, "*",
                         );
                     } catch (e) {
-                        console.warn("[GSViewer] bad saved camera state:", e);
+                        console.warn("[GaussianPack] bad saved camera state:", e);
                     }
                 };
 
@@ -352,7 +352,7 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
 
-                    console.log("[GSViewer] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
+                    console.log("[GaussianPack] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
                 };
 
                 // Track iframe load state
@@ -431,18 +431,18 @@ app.registerExtension({
 
                             if (response.ok) {
                                 const result = await response.json();
-                                console.log('[GSViewer] Screenshot saved:', result.name);
+                                console.log('[GaussianPack] Screenshot saved:', result.name);
                             } else {
                                 throw new Error(`Upload failed: ${response.status}`);
                             }
 
                         } catch (error) {
-                            console.error('[GSViewer] Error saving screenshot:', error);
+                            console.error('[GaussianPack] Error saving screenshot:', error);
                         }
                     }
                     // Handle error messages from iframe
                     else if (event.data.type === 'MESH_ERROR' && event.data.error) {
-                        console.error('[GSViewer] Error from viewer:', event.data.error);
+                        console.error('[GaussianPack] Error from viewer:', event.data.error);
                         if (infoPanel) {
                             infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error: ${event.data.error}</div>`;
                         }
@@ -455,7 +455,7 @@ app.registerExtension({
                 // Handle execution
                 const onExecuted = this.onExecuted;
                 this.onExecuted = function(message) {
-                    console.log("[GSViewer] onExecuted called with:", message);
+                    console.log("[GaussianPack] onExecuted called with:", message);
                     onExecuted?.apply(this, arguments);
 
                     // Check for errors
@@ -501,7 +501,7 @@ app.registerExtension({
 
                         // Wire URL + iframe filename based on transport_format.
                         //   "ply" -> ComfyUI's /view streams the raw PLY.
-                        //   "spz" -> /gsviewer/spz lazy-transcodes
+                        //   "spz" -> /gaussianpack/spz lazy-transcodes
                         //           via vendored spz-js (~9× smaller). On
                         //           first call the server pays the transcode
                         //           cost; subsequent calls hit the cached
@@ -512,7 +512,7 @@ app.registerExtension({
                         // honest).
                         let filepath, iframeFilename, loadLabel;
                         if (transportFormat === "spz") {
-                            filepath       = `/gsviewer/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                            filepath       = `/gaussianpack/spz?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
                             iframeFilename = filename.replace(/\.ply$/i, ".spz");
                             loadLabel      = "Transcoding + downloading SPZ...";
                         } else {
@@ -524,7 +524,7 @@ app.registerExtension({
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async () => {
                             if (!iframe.contentWindow) {
-                                console.error("[GSViewer] Iframe contentWindow not available");
+                                console.error("[GaussianPack] Iframe contentWindow not available");
                                 return;
                             }
 
@@ -532,11 +532,11 @@ app.registerExtension({
                                 // Fetch the file from parent context (authenticated).
                                 // Stream so we can log download progress.
                                 const t0 = performance.now();
-                                console.log("[GSViewer] fetch start:", filepath);
+                                console.log("[GaussianPack] fetch start:", filepath);
                                 node._showLoadBar?.(loadLabel);
                                 const response = await fetch(filepath);
                                 if (!response.ok) {
-                                    // Bubble the server's body up — for /gsviewer/spz
+                                    // Bubble the server's body up — for /gaussianpack/spz
                                     // we put an actionable message there (e.g. "spz not installed").
                                     let body = "";
                                     try { body = (await response.text() || "").slice(0, 400); } catch (_) {}
@@ -544,7 +544,7 @@ app.registerExtension({
                                 }
                                 const totalHdr = response.headers.get("content-length");
                                 const total = totalHdr ? parseInt(totalHdr, 10) : 0;
-                                console.log(`[GSViewer] fetch response 200; content-length=${total || "unknown"}`);
+                                console.log(`[GaussianPack] fetch response 200; content-length=${total || "unknown"}`);
 
                                 const chunks = [];
                                 let received = 0;
@@ -563,13 +563,13 @@ app.registerExtension({
                                             node._setLoadProgress?.(pct, `Downloading: ${mb} / ${tmb} MB`);
                                             const ipct = Math.floor(pct);
                                             if (ipct !== lastPctLogged && (ipct % 5 === 0 || ipct === 100)) {
-                                                console.log(`[GSViewer] download ${ipct}%  ${mb}/${tmb} MB`);
+                                                console.log(`[GaussianPack] download ${ipct}%  ${mb}/${tmb} MB`);
                                                 lastPctLogged = ipct;
                                             }
                                         } else {
                                             node._setLoadProgress?.(50, `Downloading: ${(received/(1024*1024)).toFixed(1)} MB`);
                                             if (chunks.length % 64 === 0) {
-                                                console.log(`[GSViewer] downloaded ${(received/(1024*1024)).toFixed(1)} MB so far`);
+                                                console.log(`[GaussianPack] downloaded ${(received/(1024*1024)).toFixed(1)} MB so far`);
                                             }
                                         }
                                     }
@@ -581,12 +581,12 @@ app.registerExtension({
                                 const arrayBuffer = u8.buffer;
                                 const dt = performance.now() - t0;
                                 const speed = received > 0 ? (received / (1024*1024)) / (dt / 1000) : 0;
-                                console.log(`[GSViewer] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
+                                console.log(`[GaussianPack] fetch done: ${arrayBuffer.byteLength} bytes in ${dt.toFixed(0)} ms (${speed.toFixed(1)} MB/s)`);
 
                                 // Send the data to iframe — filename carries
                                 // the extension so the renderer can sniff
                                 // format (Spark/PlayCanvas both auto-detect).
-                                console.log("[GSViewer] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", iframeFilename);
+                                console.log("[GaussianPack] posting LOAD_MESH_DATA to iframe, renderer:", renderer, "filename:", iframeFilename);
                                 node._setLoadProgress?.(100, "Parsing splats...");
                                 iframe.contentWindow.postMessage({
                                     type: "LOAD_MESH_DATA",
@@ -598,7 +598,7 @@ app.registerExtension({
                                     timestamp: Date.now()
                                 }, "*", [arrayBuffer]);
                             } catch (error) {
-                                console.error("[GSViewer] Error fetching splat:", error);
+                                console.error("[GaussianPack] Error fetching splat:", error);
                                 infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error loading splat: ${error.message}</div>`;
                             }
                         };

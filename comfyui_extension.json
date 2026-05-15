@@ -1,8 +1,8 @@
 {
-  "name": "ComfyUI-GSViewer",
-  "display_name": "ComfyUI-GSViewer",
+  "name": "ComfyUI-GaussianPack",
+  "display_name": "ComfyUI-GaussianPack",
   "description": "Tiny Gaussian Splat turntable viewer node for ComfyUI.",
   "author": "PozzettiAndrea",
-  "repo": "https://github.com/PozzettiAndrea/ComfyUI-GSViewer",
+  "repo": "https://github.com/PozzettiAndrea/ComfyUI-GaussianPack",
   "license": "GPL-3.0-or-later"
 }

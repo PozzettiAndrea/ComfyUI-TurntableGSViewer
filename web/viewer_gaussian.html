@@ -161,7 +161,8 @@
     {
         "imports": {
             "three": "./js/three.module.min.js",
-            "three/addons/controls/OrbitControls.js": "./js/OrbitControls.js"
+            "three/addons/controls/OrbitControls.js": "./js/OrbitControls.js",
+            "three/addons/controls/TrackballControls.js": "./js/TrackballControls.js"
         }
     }
     </script>
@@ -225,7 +226,10 @@
     // ============================================================
 
     import * as THREE from 'three';
-    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    // TrackballControls: ParaView-style free rotation (no fixed up vector,
+    // no gimbal lock at poles, supports roll). OrbitControls kept its
+    // azimuth/up constraints which felt locked when looking from below.
+    import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
     import { SparkRenderer, SplatMesh } from './js/spark.module.min.js';
 
     // Lazy <script> loader for non-module bundles (PlayCanvas).
@@ -278,7 +282,7 @@
     function setOpacityInputs(v) { opacityRange.value = v; opacityInput.value = v; }
 
     // ============================================================
-    // Base: Three.js scene + camera + WebGLRenderer + OrbitControls
+    // Base: Three.js scene + camera + WebGLRenderer + TrackballControls
     // ============================================================
     class ThreeBaseAdapter {
         constructor(canvas) {
@@ -339,8 +343,13 @@
             this.camera.position.set(0, 0, -3);
             this.camera.lookAt(0, 0, 0);
 
-            this.controls = new OrbitControls(this.camera, this.canvas);
-            this.controls.enableDamping = false;
+            this.controls = new TrackballControls(this.camera, this.canvas);
+            // ParaView-ish tuning: snappier rotate, modest pan speed.
+            this.controls.rotateSpeed = 3.5;
+            this.controls.zoomSpeed = 1.2;
+            this.controls.panSpeed = 0.8;
+            this.controls.staticMoving = true;     // no inertia drift
+            this.controls.dynamicDampingFactor = 0.15;
             this.controls.target.set(0, 0, 0);
             this.controls.update();
 
@@ -350,6 +359,9 @@
                 renderer.setSize(w, h, false);
                 this.camera.aspect = w / Math.max(1, h);
                 this.camera.updateProjectionMatrix();
+                // TrackballControls maps mouse pixels to NDC against a cached
+                // screen rect — must be refreshed after each resize.
+                this.controls.handleResize();
             });
             ro.observe(this.canvas);
         }

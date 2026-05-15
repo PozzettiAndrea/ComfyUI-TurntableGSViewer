@@ -9,7 +9,7 @@ decode in their current shipped builds) — `spz-js` writes v2/gzipped
 which both renderers can read.
 
 Query:
-    /gsviewer/spz?filename=<output-relative>.ply
+    /gaussianpack/spz?filename=<output-relative>.ply
                            &subfolder=<sub>
                            &type=output
 
@@ -29,7 +29,7 @@ from aiohttp import web
 
 import folder_paths
 
-log = logging.getLogger("comfyui-gsviewer")
+log = logging.getLogger("comfyui-gaussianpack")
 
 # Per-path lock — concurrent requests for the same PLY share the cost.
 _locks: dict[str, threading.Lock] = {}
@@ -109,7 +109,7 @@ def register_routes() -> None:
 
     routes = PromptServer.instance.routes
 
-    @routes.get("/gsviewer/spz")
+    @routes.get("/gaussianpack/spz")
     async def get_spz(request: web.Request) -> web.StreamResponse:
         filename  = request.query.get("filename", "")
         subfolder = request.query.get("subfolder", "")

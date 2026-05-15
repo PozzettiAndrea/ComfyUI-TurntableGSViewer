@@ -1,2 +1,0 @@
-# No Python deps — PLY parsing happens in the browser via gsplat.js.
-# Server-side gzip transport in spz_route.py uses Python stdlib only.
