@@ -55,7 +55,7 @@ app.registerExtension({
                 // Hint label: user must right-click "Reload Node" to refresh PLY list
                 const hintEl = document.createElement("div");
                 hintEl.style.cssText = "font-size:10px;color:#888;text-align:center;padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-                hintEl.textContent = "Right-click → Refresh Node to load new PLY files";
+                hintEl.textContent = "Right-click -> Refresh Node to load new PLY files";
                 this.addDOMWidget("ply_hint", "PLY_HINT", hintEl, {
                     serialize: false,
                     hideOnZoom: false,
@@ -91,7 +91,38 @@ app.registerExtension({
             // defaults).
             const _origOnConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function(info) {
+                // Build a name -> value map from the saved metadata BEFORE
+                // calling configure. ComfyUI's positional widget pairing
+                // breaks when the live frontend renders a widget that
+                // wasn't a widget at save time (most commonly a
+                // `forceInput: True` STRING input — saved as a connection
+                // socket only, but rendered today as widget[0]). Saved
+                // `inputs[]` carries a `widget: {name}` annotation only on
+                // inputs that had widgets, so it's the authoritative
+                // ordering for widgets_values.
+                const savedValues = Array.isArray(info?.widgets_values) ? info.widgets_values : [];
+                const savedInputs = Array.isArray(info?.inputs) ? info.inputs : [];
+                const valueByName = {};
+                let valIdx = 0;
+                for (const inp of savedInputs) {
+                    if (inp && inp.widget && typeof inp.widget.name === "string") {
+                        valueByName[inp.widget.name] = savedValues[valIdx];
+                        valIdx++;
+                    }
+                }
+
                 const r = _origOnConfigure ? _origOnConfigure.apply(this, arguments) : undefined;
+
+                // Reconcile by name: any widget whose name matches a saved
+                // entry gets the saved value (overriding the positional
+                // mis-pairing that configure() may have just applied).
+                for (const w of (this.widgets || [])) {
+                    if (w && w.name in valueByName) {
+                        const v = valueByName[w.name];
+                        if (v !== undefined) w.value = v;
+                    }
+                }
+
                 for (const w of (this.widgets || [])) {
                     const optsValues = w.options && Array.isArray(w.options.values);
                     const isCombo    = w.type === "combo" || optsValues;
@@ -261,7 +292,7 @@ app.registerExtension({
                     pendingRestoreJSON = savedCfg.state;
                 }
 
-                // Iframe-display widget. serialize: false → never lands in
+                // Iframe-display widget. serialize: false -> never lands in
                 // widgets_values; we own persistence via node.properties.
                 const widget = this.addDOMWidget(
                     "preview_gaussian", "GAUSSIAN_PREVIEW", container,
@@ -309,7 +340,7 @@ app.registerExtension({
                     // node's state.
                     if (event.source !== iframe.contentWindow) return;
 
-                    // Camera-state pushes from iframe → persist on
+                    // Camera-state pushes from iframe -> persist on
                     // node.properties["Camera Config"] (Load3D pattern).
                     if (event.data?.type === "CAMERA_STATE" && event.data.state) {
                         const s = event.data.state;
@@ -321,7 +352,7 @@ app.registerExtension({
                         node.properties["Camera Config"] = cfg;
                         return;
                     }
-                    // Iframe just finished a PLY load → if we have a saved
+                    // Iframe just finished a PLY load -> if we have a saved
                     // pose, replay it. The iframe's loadPLYFromData already
                     // frames on bounds first, so this restore wins.
                     if (event.data?.type === "MESH_LOADED") {
@@ -438,8 +469,8 @@ app.registerExtension({
                         `;
 
                         // Wire URL + iframe filename based on transport_format.
-                        //   "ply" → ComfyUI's /view streams the raw PLY.
-                        //   "spz" → /gsviewer/spz lazy-transcodes
+                        //   "ply" -> ComfyUI's /view streams the raw PLY.
+                        //   "spz" -> /gsviewer/spz lazy-transcodes
                         //           via vendored spz-js (~9× smaller). On
                         //           first call the server pays the transcode
                         //           cost; subsequent calls hit the cached

@@ -1,4 +1,4 @@
-"""HTTP route that lazily transcodes a PLY → SPZ v2 (gzipped) and serves it.
+"""HTTP route that lazily transcodes a PLY -> SPZ v2 (gzipped) and serves it.
 
 Registered into ComfyUI's aiohttp server. The first request for a given
 source PLY shells out to the vendored `spz-js` (via Node) to produce a

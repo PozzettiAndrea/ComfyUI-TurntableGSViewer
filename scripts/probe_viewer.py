@@ -182,7 +182,7 @@ def main():
         page.wait_for_function("window._loaded || window._error", timeout=180000)
         page.wait_for_timeout(1500)
 
-        # Pass probe JS as a function arg → no template-literal headaches.
+        # Pass probe JS as a function arg -> no template-literal headaches.
         probe = page.evaluate("(src) => window.__gs.run(src)", PROBE_JS)
         print("[probe]\n" + json.dumps(probe, indent=2))
 

@@ -7,7 +7,7 @@ Tiny Gaussian-splat turntable viewer for ComfyUI. One node, `Preview Gaussians`,
 gsplat.js WebGL preview and camera-intrinsics widgets (FOV, image width, image height).
 
 ```
-ply_path ── Preview Gaussians
+ply_path -- Preview Gaussians
 ```
 
 GPL-3.0. Forked structurally from
