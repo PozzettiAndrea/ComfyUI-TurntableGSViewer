@@ -3,7 +3,7 @@ https://github.com/user-attachments/assets/4e21f1fd-9ba2-4ecc-b777-34f5dd9f7075
 
 # ComfyUI-GaussianPack
 
-Tiny Gaussian-splat turntable viewer for ComfyUI. One node, `Preview Gaussians`, with a
+Tiny Gaussian-splat viewer for ComfyUI. One node, `Preview Gaussians`, with a
 gsplat.js WebGL preview and camera-intrinsics widgets (FOV, image width, image height).
 
 ```

@@ -1,26 +1,12 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+import logging
 
-"""ComfyUI-GaussianPack — Gaussian-splat preview + target-count merging."""
+log = logging.getLogger("comfyui-gaussianpack")
+log.info("loading...")
 
-from .preview_gaussian import PreviewGaussians
-from .merge_gaussians import GaussianMerge
-from .load_ply import LoadPLY
-from .spz_route import register_routes as _register_spz_route
+from comfy_env import register_nodes
 
-_register_spz_route()
+log.info("calling register_nodes")
+NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS = register_nodes()
 
-WEB_DIRECTORY = "web"
-
-NODE_CLASS_MAPPINGS = {
-    "PreviewGaussians": PreviewGaussians,
-    "GaussianMerge": GaussianMerge,
-    "LoadPLY": LoadPLY,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "PreviewGaussians": "Preview Gaussians",
-    "GaussianMerge": "Gaussian Merge to Target",
-    "LoadPLY": "Load PLY",
-}
-
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+WEB_DIRECTORY = "./web"
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

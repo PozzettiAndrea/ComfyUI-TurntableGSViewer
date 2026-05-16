@@ -1,3 +1,1 @@
 [node_reqs]
-# GaussianPack has no downstream custom-node deps. Lito-side nodes
-# depend on GaussianPack (not the other way around).

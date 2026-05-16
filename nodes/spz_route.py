@@ -35,8 +35,11 @@ log = logging.getLogger("comfyui-gaussianpack")
 _locks: dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()
 
+# spz_route.py lives in `nodes/`; the JS subprocess tool lives next to the
+# browser-facing assets in `web/server_tools/`. ../web/server_tools is
+# resolved from this file's location.
 THIS_DIR = Path(__file__).resolve().parent
-NODE_SCRIPT = THIS_DIR / "server_tools" / "ply_to_spz.mjs"
+NODE_SCRIPT = THIS_DIR.parent / "web" / "server_tools" / "ply_to_spz.mjs"
 
 
 def _lock_for(p: str) -> threading.Lock:

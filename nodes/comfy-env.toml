@@ -6,8 +6,5 @@ plyfile = "*"
 # NanoGS — training-free pairwise-merge Gaussian decimator (CPU,
 # pure Python). Same MPMM (mass-preserving moment matching)
 # algorithm @playcanvas/splat-transform's `--decimate` uses. Ship
-# as a Python git dep so the comfy-env pixi solve handles it and
-# we stay off the Node toolchain. The upstream paper notes a CUDA
-# port is "future work" — fine for one-shot decimation of LiTo
-# outputs (~10-30s for 1M -> 200K on CPU).
+# as a Python git dep so the comfy-env pixi solve handles it.
 nanogs = { git = "https://github.com/saliteta/NanoGS.git" }
