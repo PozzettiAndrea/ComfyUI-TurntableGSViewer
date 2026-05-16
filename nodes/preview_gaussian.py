@@ -3,10 +3,40 @@
 import os
 
 from .common import (
+    COMFYUI_INPUT_FOLDER,
     COMFYUI_OUTPUT_FOLDER,
     get_default_extrinsics,
     get_default_intrinsics,
 )
+
+
+def _resolve_for_view(abs_path: str) -> tuple[str, str, str]:
+    """Map an absolute on-disk PLY to ComfyUI's `/view` parameters.
+
+    Returns (filename, subfolder, folder_kind) where folder_kind is one
+    of "output" / "input" / "output" (fallback). The JS preview fetches
+    `/view?filename=...&type=<kind>&subfolder=...`, which is keyed off
+    `folder_paths.get_<kind>_directory()` on the server side.
+    """
+    bases = []
+    if COMFYUI_OUTPUT_FOLDER:
+        bases.append(("output", COMFYUI_OUTPUT_FOLDER))
+    if COMFYUI_INPUT_FOLDER:
+        bases.append(("input", COMFYUI_INPUT_FOLDER))
+
+    for kind, base in bases:
+        # normpath both sides so trailing slashes / .. don't trip startswith
+        b = os.path.normpath(base) + os.sep
+        a = os.path.normpath(abs_path)
+        if a.startswith(b):
+            rel = os.path.relpath(a, base)
+            subfolder, filename = os.path.split(rel)
+            return filename, subfolder.replace(os.sep, "/"), kind
+
+    # Path lives outside both — `/view` will 404. Fall back to "output"
+    # and emit a bare basename; user will need to copy the PLY into
+    # ComfyUI/input/ or output/ for the previewer to reach it.
+    return os.path.basename(abs_path), "", "output"
 
 
 def _count_gaussians(path: str) -> int:
@@ -86,11 +116,7 @@ class PreviewGaussians:
         if not os.path.exists(ply_path):
             return {"ui": {"error": [f"File not found: {ply_path}"]}}
 
-        filename = os.path.basename(ply_path)
-        if COMFYUI_OUTPUT_FOLDER and ply_path.startswith(COMFYUI_OUTPUT_FOLDER):
-            relative_path = os.path.relpath(ply_path, COMFYUI_OUTPUT_FOLDER)
-        else:
-            relative_path = filename
+        filename, subfolder, folder_kind = _resolve_for_view(ply_path)
 
         file_size_mb = round(os.path.getsize(ply_path) / (1024 * 1024), 2)
         num_gaussians = _count_gaussians(ply_path)
@@ -98,8 +124,10 @@ class PreviewGaussians:
         extrinsics = get_default_extrinsics()
 
         return {"ui": {
-            "ply_file": [relative_path],
+            "ply_file": [filename],
             "filename": [filename],
+            "ply_type": [folder_kind],         # "input" | "output" — JS passes to /view?type=
+            "ply_subfolder": [subfolder],
             "file_size_mb": [file_size_mb],
             "num_gaussians": [num_gaussians],
             "extrinsics": [extrinsics],
