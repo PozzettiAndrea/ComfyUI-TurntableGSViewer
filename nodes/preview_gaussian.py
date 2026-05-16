@@ -3,8 +3,6 @@
 import os
 
 from .common import (
-    COMFYUI_INPUT_FOLDER,
-    COMFYUI_OUTPUT_FOLDER,
     get_default_extrinsics,
     get_default_intrinsics,
 )
@@ -14,28 +12,27 @@ def _resolve_for_view(abs_path: str) -> tuple[str, str, str]:
     """Map an absolute on-disk PLY to ComfyUI's `/view` parameters.
 
     Returns (filename, subfolder, folder_kind) where folder_kind is one
-    of "output" / "input" / "output" (fallback). The JS preview fetches
-    `/view?filename=...&type=<kind>&subfolder=...`, which is keyed off
-    `folder_paths.get_<kind>_directory()` on the server side.
+    of `"output"`, `"input"`, `"temp"`. Reads `folder_paths` live
+    (the runtime API in folder_paths.py:214) so a `--input-directory`
+    CLI override or any other runtime config is honored. The JS fetches
+    `/view?filename=...&type=<kind>&subfolder=...`.
     """
-    bases = []
-    if COMFYUI_OUTPUT_FOLDER:
-        bases.append(("output", COMFYUI_OUTPUT_FOLDER))
-    if COMFYUI_INPUT_FOLDER:
-        bases.append(("input", COMFYUI_INPUT_FOLDER))
+    import folder_paths
 
-    for kind, base in bases:
-        # normpath both sides so trailing slashes / .. don't trip startswith
+    a = os.path.normpath(abs_path)
+    for kind in ("output", "input", "temp"):
+        base = folder_paths.get_directory_by_type(kind)
+        if not base:
+            continue
         b = os.path.normpath(base) + os.sep
-        a = os.path.normpath(abs_path)
         if a.startswith(b):
             rel = os.path.relpath(a, base)
             subfolder, filename = os.path.split(rel)
             return filename, subfolder.replace(os.sep, "/"), kind
 
-    # Path lives outside both — `/view` will 404. Fall back to "output"
-    # and emit a bare basename; user will need to copy the PLY into
-    # ComfyUI/input/ or output/ for the previewer to reach it.
+    # Path lives outside any of Comfy's directories — `/view` will 404.
+    # Return a bare basename + "output" so the caller still sees a
+    # reasonable filename in the info panel.
     return os.path.basename(abs_path), "", "output"
 
 
