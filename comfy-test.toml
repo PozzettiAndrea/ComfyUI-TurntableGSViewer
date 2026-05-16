@@ -3,9 +3,8 @@ levels = ["syntax", "install", "registration", "instantiation"]
 publish = true
 
 [test.workflows]
-# Workflow-level testing lives downstream in ComfyUI-LiTo (which is
-# the consumer of GaussianPack's PreviewGaussians + GaussianMerge
-# nodes). GaussianPack itself only verifies registration/instantiation.
+cpu = ["merge_splats"]
+gpu = []
 
 [test.platforms]
 linux = true
